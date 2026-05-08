@@ -108,22 +108,32 @@ LANGUAGES = {
     "zu": "Zulu (isiZulu)",
 }
 
-# Load translation dictionary from CSV
-_dict_path = Path(__file__).parent.parent / "dict.csv"
-_glossary_lines = []
-if _dict_path.exists():
-    with open(_dict_path, encoding="utf-8") as f:
-        for row in csv.reader(f):
-            if len(row) >= 2:
-                _glossary_lines.append(f"- {row[0]} → {row[1]}")
+DICT_PATH = Path(__file__).parent.parent / "dict.csv"
 
-_glossary_section = ""
-if _glossary_lines:
-    _glossary_section = (
+
+def load_glossary_pairs() -> list[tuple[str, str]]:
+    """Read the current glossary CSV from disk and return (src, tgt) pairs."""
+    if not DICT_PATH.exists():
+        return []
+    pairs: list[tuple[str, str]] = []
+    with open(DICT_PATH, encoding="utf-8") as f:
+        for row in csv.reader(f):
+            if len(row) >= 2 and row[0].strip() and row[1].strip():
+                pairs.append((row[0].strip(), row[1].strip()))
+    return pairs
+
+
+def _glossary_section() -> str:
+    pairs = load_glossary_pairs()
+    if not pairs:
+        return ""
+    lines = "\n".join(f"- {src} → {tgt}" for src, tgt in pairs)
+    return (
         "\n\nUse the following glossary for specific terms. "
         "When you hear these words, always use the paired translation:\n"
-        + "\n".join(_glossary_lines)
+        + lines
     )
+
 
 MODEL = os.getenv("DEMO_AGENT_MODEL", "gemini-3.1-flash-live-preview")
 
@@ -140,7 +150,7 @@ def create_agent(source_lang: str = "en", target_lang: str = "ja") -> Agent:
             f"Listen to the incoming audio and immediately output the translated "
             f"version in {target_name}, maintaining the speaker's original tone "
             f"and urgency."
-            + _glossary_section
+            + _glossary_section()
         ),
     )
 

@@ -27,13 +27,29 @@ GOOGLE_API_KEY=your-api-key
 
 ## Custom Glossary
 
-You can provide a custom glossary in `app/dict.csv` to ensure specific terms are always translated consistently. Each line is a comma-separated pair of source and target terms:
+Pin specific terms to a fixed translation so the model always renders them the same way. Manage the glossary from the **Glossary** button in the header — no server restart needed.
 
-```csv
-Kubernetes,クバネティス
-Cloud Run,クラウドラン
-Gemini,ジェミニ
+1. Click **Glossary**. The modal shows the active entries and the count.
+2. Click **Choose .csv file** and pick a UTF-8 CSV (max 256 KB) with one `source,target` pair per line:
+
+   ```csv
+   Kubernetes,クバネティス
+   Cloud Run,クラウドラン
+   Gemini,ジェミニ
+   ```
+
+3. Click **Upload & replace**. The upload **replaces** the entire glossary. The new entries take effect on the **next** session — click **Start Audio** again, or change languages to start a fresh connection. Live sessions keep the glossary they started with.
+
+Status feedback appears below the entry count: green for success, red for parse errors (e.g. a line missing the comma) — in the error case the previous glossary stays in place.
+
+The same operations are exposed over HTTP for scripting:
+
+```bash
+curl http://localhost:8000/api/glossary                 # current entries
+curl -F file=@my_terms.csv http://localhost:8000/api/glossary  # replace
 ```
+
+Uploads are persisted to `app/dict.csv`, which is also where the default glossary shipped with the repo lives. On Cloud Run the file lives for the lifetime of a container instance and is lost on cold start — for durable glossaries, bake the file into the image or back the path with a mounted volume / GCS.
 
 ## Run
 

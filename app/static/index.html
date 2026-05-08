@@ -26,6 +26,7 @@
         </div>
       </div>
       <div class="header-controls">
+        <button id="openGlossary" class="toggle-console-btn">Glossary</button>
         <button id="toggleConsole" class="toggle-console-btn">Console</button>
         <div class="connection-status">
           <span class="status-indicator" id="statusIndicator"></span>
@@ -33,6 +34,35 @@
         </div>
       </div>
     </header>
+
+    <div class="modal-overlay hidden" id="glossaryOverlay">
+      <div class="modal" role="dialog" aria-labelledby="glossaryTitle">
+        <div class="modal-header">
+          <h2 id="glossaryTitle">Glossary</h2>
+          <button class="modal-close" id="closeGlossary" aria-label="Close">×</button>
+        </div>
+        <div class="modal-body">
+          <p class="modal-hint">
+            Replace the active glossary by uploading a UTF-8 CSV with one
+            <code>source,target</code> pair per line. New entries take effect on
+            the next session (click <strong>Start Audio</strong> again, or change
+            languages).
+          </p>
+          <div class="glossary-current">
+            <div class="glossary-current-header">
+              <span>Current entries: <span id="glossaryCount">0</span></span>
+              <span id="glossaryStatus" class="glossary-status"></span>
+            </div>
+            <div id="glossaryList" class="glossary-list"></div>
+          </div>
+          <div class="glossary-upload">
+            <label class="file-label" for="glossaryFile">Choose .csv file</label>
+            <input type="file" id="glossaryFile" accept=".csv,text/csv" />
+            <button id="uploadGlossary" type="button">Upload &amp; replace</button>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <div class="main-layout">
       <div class="container">

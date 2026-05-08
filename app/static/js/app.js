@@ -603,3 +603,90 @@ function audioRecorderHandler(pcmData) {
     websocket.send(pcmData);
   }
 }
+
+/**
+ * Glossary modal
+ */
+const glossaryOverlay = document.getElementById("glossaryOverlay");
+const glossaryList = document.getElementById("glossaryList");
+const glossaryCount = document.getElementById("glossaryCount");
+const glossaryStatus = document.getElementById("glossaryStatus");
+const glossaryFile = document.getElementById("glossaryFile");
+
+function renderGlossary(pairs) {
+  glossaryCount.textContent = pairs.length;
+  if (!pairs.length) {
+    glossaryList.innerHTML = '<div class="glossary-empty">No glossary entries.</div>';
+    return;
+  }
+  glossaryList.innerHTML = "";
+  for (const { source, target } of pairs) {
+    const row = document.createElement("div");
+    row.className = "glossary-row";
+    const src = document.createElement("span");
+    src.className = "glossary-src";
+    src.textContent = source;
+    const arrow = document.createElement("span");
+    arrow.className = "glossary-arrow";
+    arrow.textContent = "→";
+    const tgt = document.createElement("span");
+    tgt.className = "glossary-tgt";
+    tgt.textContent = target;
+    row.append(src, arrow, tgt);
+    glossaryList.appendChild(row);
+  }
+}
+
+function setGlossaryStatus(text, kind) {
+  glossaryStatus.textContent = text || "";
+  glossaryStatus.className = "glossary-status" + (kind ? " " + kind : "");
+}
+
+async function loadGlossary() {
+  setGlossaryStatus("");
+  try {
+    const resp = await fetch("/api/glossary");
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const { pairs } = await resp.json();
+    renderGlossary(pairs);
+  } catch (err) {
+    setGlossaryStatus("Failed to load: " + err.message, "error");
+  }
+}
+
+document.getElementById("openGlossary").addEventListener("click", async () => {
+  glossaryOverlay.classList.remove("hidden");
+  await loadGlossary();
+});
+
+document.getElementById("closeGlossary").addEventListener("click", () => {
+  glossaryOverlay.classList.add("hidden");
+});
+
+glossaryOverlay.addEventListener("click", (e) => {
+  if (e.target === glossaryOverlay) glossaryOverlay.classList.add("hidden");
+});
+
+document.getElementById("uploadGlossary").addEventListener("click", async () => {
+  const file = glossaryFile.files[0];
+  if (!file) {
+    setGlossaryStatus("Pick a .csv file first.", "error");
+    return;
+  }
+  setGlossaryStatus("Uploading…");
+  const form = new FormData();
+  form.append("file", file);
+  try {
+    const resp = await fetch("/api/glossary", { method: "POST", body: form });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || ("HTTP " + resp.status));
+    renderGlossary(data.pairs);
+    setGlossaryStatus(
+      `Replaced with ${data.pairs.length} entries. Applies on next session.`,
+      "ok"
+    );
+    glossaryFile.value = "";
+  } catch (err) {
+    setGlossaryStatus("Upload failed: " + err.message, "error");
+  }
+});

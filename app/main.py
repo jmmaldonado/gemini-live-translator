@@ -5,8 +5,11 @@ import logging
 import warnings
 from pathlib import Path
 
+import csv
+import io
+
 from dotenv import load_dotenv
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from google.adk.agents.live_request_queue import LiveRequestQueue
@@ -39,7 +42,16 @@ Gemini._live_api_version = "v1beta"
 import sys
 
 sys.path.insert(0, str(Path(__file__).parent))
-from translator_agent.agent import agent, create_agent, LANGUAGES, POPULAR_LANGUAGES  # noqa: E402
+from translator_agent.agent import (  # noqa: E402
+    DICT_PATH,
+    LANGUAGES,
+    POPULAR_LANGUAGES,
+    agent,
+    create_agent,
+    load_glossary_pairs,
+)
+
+MAX_GLOSSARY_BYTES = 256 * 1024  # 256 KB cap on uploaded CSV
 
 # Configure logging
 logging.basicConfig(
@@ -76,6 +88,61 @@ async def root():
 async def get_languages():
     """Return available languages with popular ones highlighted."""
     return {"languages": LANGUAGES, "popular": POPULAR_LANGUAGES}
+
+
+@app.get("/api/glossary")
+async def get_glossary():
+    """Return the currently active glossary pairs."""
+    pairs = load_glossary_pairs()
+    return {"pairs": [{"source": s, "target": t} for s, t in pairs]}
+
+
+@app.post("/api/glossary")
+async def upload_glossary(file: UploadFile):
+    """Replace the glossary with the uploaded CSV (source,target per line)."""
+    if not (file.filename or "").lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="File must have a .csv extension.")
+
+    raw = await file.read()
+    if len(raw) > MAX_GLOSSARY_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File exceeds {MAX_GLOSSARY_BYTES} bytes.",
+        )
+
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(
+            status_code=400, detail=f"CSV must be UTF-8: {exc}"
+        ) from exc
+
+    pairs: list[tuple[str, str]] = []
+    for line_no, row in enumerate(csv.reader(io.StringIO(text)), start=1):
+        if not row or all(not c.strip() for c in row):
+            continue
+        if len(row) < 2 or not row[0].strip() or not row[1].strip():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Line {line_no} must be 'source,target' with both fields.",
+            )
+        pairs.append((row[0].strip(), row[1].strip()))
+
+    try:
+        with open(DICT_PATH, "w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerows(pairs)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not write glossary file: {exc}",
+        ) from exc
+
+    logger.info("Glossary updated: %d entries", len(pairs))
+    return {
+        "pairs": [{"source": s, "target": t} for s, t in pairs],
+        "applies_on": "next-session",
+    }
 
 
 @app.websocket("/ws/{user_id}/{session_id}")
