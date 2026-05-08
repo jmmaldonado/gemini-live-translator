@@ -26,8 +26,10 @@ os.environ.pop("GOOGLE_GENAI_USE_VERTEXAI", None)
 os.environ.pop("GOOGLE_CLOUD_PROJECT", None)
 os.environ.pop("GOOGLE_CLOUD_LOCATION", None)
 
-# Patch ADK to use v1beta for Gemini API live connections
-# ADK 1.28.1 still hardcodes v1alpha which doesn't support gemini-3.1-flash-live-preview
+# Patch ADK to use v1beta for Gemini API live connections.
+# ADK (as of 1.32.0) still defaults `_live_api_version` to "v1alpha" for AI
+# Studio API-key auth, but `gemini-3.1-flash-live-preview` is only on v1beta.
+# See google_llm.py:_live_api_version. Tracked in google/adk-python#5075.
 from google.adk.models.google_llm import Gemini
 
 Gemini._live_api_version = "v1beta"
@@ -160,8 +162,7 @@ async def websocket_endpoint(
                 live_request_queue.send_realtime(audio_blob)
 
             elif "text" in message:
-                # Text messages are not supported by this audio-only model
-                logger.debug("Ignoring text message (audio-only model)")
+                logger.debug("Ignoring text message (translator is audio-only)")
 
     async def downstream_task() -> None:
         """Receives Events from run_live() and sends to WebSocket."""

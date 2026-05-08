@@ -54,7 +54,7 @@ Uses ADK's 4-phase bidi-streaming lifecycle over WebSocket:
 
 ## Model
 
-Uses `gemini-3.1-flash-live-preview` with the Gemini API (`generativelanguage.googleapis.com`). This is a native audio model supporting real-time audio input/output with transcription. It only accepts `realtime_input` (audio blobs), not `client_content` (turn-based text).
+Uses `gemini-3.1-flash-live-preview` with the Gemini API (`generativelanguage.googleapis.com`). This is a native audio model supporting real-time audio input/output with transcription. The app sends audio via `realtime_input` (audio blobs).
 
 ## Deployment to Cloud Run
 
@@ -101,17 +101,13 @@ Key flags:
 
 ## ADK/SDK Compatibility Patches
 
-ADK 1.28.1 + genai SDK 1.70 require patches in `app/main.py` to work with `gemini-3.1-flash-live-preview` on the Gemini API:
+ADK 1.32.0 still needs two small adjustments in `app/main.py` to talk to `gemini-3.1-flash-live-preview` over the Gemini API:
 
 1. **Remove Vertex AI env vars** — The genai SDK auto-detects `GOOGLE_CLOUD_PROJECT`/`GOOGLE_CLOUD_LOCATION` and routes to `aiplatform.googleapis.com`. We pop these env vars to force Gemini API key routing via `generativelanguage.googleapis.com`. (SDK behavior, not an ADK bug.)
 
-2. **API version `v1alpha` → `v1beta`** — ADK hardcodes `Gemini._live_api_version = "v1alpha"` for live connections, but `gemini-3.1-flash-live-preview` only exists on `v1beta`. Tracked in [google/adk-python#5075](https://github.com/google/adk-python/issues/5075), fix in [PR #5076](https://github.com/google/adk-python/pull/5076).
+2. **API version `v1alpha` → `v1beta`** — ADK still defaults `Gemini._live_api_version` to `v1alpha` for AI Studio API-key auth, but `gemini-3.1-flash-live-preview` is only served on `v1beta`. Tracked in [google/adk-python#5075](https://github.com/google/adk-python/issues/5075).
 
-3. **Audio-only (no text input)** — The model rejects `client_content` messages with `1007 invalid argument`. ADK also replays session history as `client_content` on reconnect, so text input is removed entirely. Tracked in [google/adk-python#5018](https://github.com/google/adk-python/issues/5018) and [#5075](https://github.com/google/adk-python/issues/5075), fix in [PR #5076](https://github.com/google/adk-python/pull/5076).
+Previously tracked issues that are **fixed upstream** and no longer require local workarounds:
 
-
-### Known Issue: Session resumption / transparent reconnection
-
-The Live API disconnects after ~10 minutes. ADK has session resumption plumbing (stores handles from `session_resumption_update` events), but the reconnection loop in `base_llm_flow.py` never iterates — both exception handlers re-raise instead of continuing the `while True` loop. Additionally, `goAway` messages from the server are silently dropped.
-
-Tracked upstream: [google/adk-python#4996](https://github.com/google/adk-python/issues/4996)
+- **Audio + text routing for Gemini 3.1 Live** ([#5018](https://github.com/google/adk-python/issues/5018)) — fixed in v1.29.0 (commit [`ee69661`](https://github.com/google/adk-python/commit/ee69661a616056fa89e0ec2188aaa59bd714d8c9)). ADK now routes input through `send_realtime_input` for the 3.1 model, so the prior "audio-only / no `client_content`" workaround is gone.
+- **Session resumption / transparent reconnection** ([#4996](https://github.com/google/adk-python/issues/4996)) — fixed in v1.32.0. The reconnection loop in `base_llm_flow.py` now iterates on `ConnectionClosed` and recoverable `APIError`s, sets `session_resumption.transparent = True`, and skips replaying history when a resumption handle exists.
