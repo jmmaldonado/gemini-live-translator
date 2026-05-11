@@ -1,15 +1,13 @@
 """FastAPI application for real-time live translation using ADK Gemini Live API."""
 
 import asyncio
+import json
 import logging
 import warnings
 from pathlib import Path
 
-import csv
-import io
-
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from google.adk.agents.live_request_queue import LiveRequestQueue
@@ -43,15 +41,15 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent))
 from translator_agent.agent import (  # noqa: E402
-    DICT_PATH,
     LANGUAGES,
     POPULAR_LANGUAGES,
     agent,
     create_agent,
-    load_glossary_pairs,
+    load_default_glossary,
 )
 
-MAX_GLOSSARY_BYTES = 256 * 1024  # 256 KB cap on uploaded CSV
+MAX_GLOSSARY_ENTRIES = 1000  # safety cap on per-session glossary length
+SETUP_TIMEOUT_SEC = 5  # how long to wait for the client's setup message
 
 # Configure logging
 logging.basicConfig(
@@ -90,59 +88,28 @@ async def get_languages():
     return {"languages": LANGUAGES, "popular": POPULAR_LANGUAGES}
 
 
-@app.get("/api/glossary")
-async def get_glossary():
-    """Return the currently active glossary pairs."""
-    pairs = load_glossary_pairs()
+@app.get("/api/glossary/defaults")
+async def get_default_glossary():
+    """Return the seed glossary baked into the image (used when localStorage is empty)."""
+    pairs = load_default_glossary()
     return {"pairs": [{"source": s, "target": t} for s, t in pairs]}
 
 
-@app.post("/api/glossary")
-async def upload_glossary(file: UploadFile):
-    """Replace the glossary with the uploaded CSV (source,target per line)."""
-    if not (file.filename or "").lower().endswith(".csv"):
-        raise HTTPException(status_code=400, detail="File must have a .csv extension.")
-
-    raw = await file.read()
-    if len(raw) > MAX_GLOSSARY_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File exceeds {MAX_GLOSSARY_BYTES} bytes.",
-        )
-
+def _parse_setup(raw: str) -> list[tuple[str, str]]:
+    """Parse the client's setup message and return validated glossary pairs."""
     try:
-        text = raw.decode("utf-8-sig")
-    except UnicodeDecodeError as exc:
-        raise HTTPException(
-            status_code=400, detail=f"CSV must be UTF-8: {exc}"
-        ) from exc
-
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
     pairs: list[tuple[str, str]] = []
-    for line_no, row in enumerate(csv.reader(io.StringIO(text)), start=1):
-        if not row or all(not c.strip() for c in row):
+    for entry in (data.get("glossary") or [])[:MAX_GLOSSARY_ENTRIES]:
+        if not isinstance(entry, dict):
             continue
-        if len(row) < 2 or not row[0].strip() or not row[1].strip():
-            raise HTTPException(
-                status_code=400,
-                detail=f"Line {line_no} must be 'source,target' with both fields.",
-            )
-        pairs.append((row[0].strip(), row[1].strip()))
-
-    try:
-        with open(DICT_PATH, "w", encoding="utf-8", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerows(pairs)
-    except OSError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Could not write glossary file: {exc}",
-        ) from exc
-
-    logger.info("Glossary updated: %d entries", len(pairs))
-    return {
-        "pairs": [{"source": s, "target": t} for s, t in pairs],
-        "applies_on": "next-session",
-    }
+        src = (entry.get("source") or "").strip()
+        tgt = (entry.get("target") or "").strip()
+        if src and tgt:
+            pairs.append((src, tgt))
+    return pairs
 
 
 @app.websocket("/ws/{user_id}/{session_id}")
@@ -165,8 +132,26 @@ async def websocket_endpoint(
     # Phase 2: Session Initialization
     # ========================================
 
+    # Wait for the client's setup message (carries the per-session glossary).
+    # Falls back to the on-disk default glossary if the client doesn't send one
+    # within SETUP_TIMEOUT_SEC (older clients, network hiccups).
+    glossary_pairs: list[tuple[str, str]] | None = None
+    try:
+        setup_raw = await asyncio.wait_for(
+            websocket.receive_text(), timeout=SETUP_TIMEOUT_SEC
+        )
+        glossary_pairs = _parse_setup(setup_raw)
+        logger.debug("Setup received: %d glossary entries", len(glossary_pairs))
+    except asyncio.TimeoutError:
+        logger.warning(
+            "No setup message within %ds; using default glossary.", SETUP_TIMEOUT_SEC
+        )
+    except WebSocketDisconnect:
+        logger.debug("Client disconnected before sending setup")
+        return
+
     # Create per-connection agent and runner for the selected language pair
-    connection_agent = create_agent(source, target)
+    connection_agent = create_agent(source, target, glossary_pairs)
     connection_runner = Runner(
         app_name=APP_NAME, agent=connection_agent, session_service=session_service
     )

@@ -27,10 +27,10 @@ GOOGLE_API_KEY=your-api-key
 
 ## Custom Glossary
 
-Pin specific terms to a fixed translation so the model always renders them the same way. Manage the glossary from the **Glossary** button in the header — no server restart needed.
+Pin specific terms to a fixed translation so the model always renders them the same way. **The glossary is per browser** — it's stored in your browser's `localStorage` and sent to the server only when you start a session. Different visitors can run different glossaries at the same time without affecting each other; nothing is persisted server-side.
 
-1. Click **Glossary**. The modal shows the active entries and the count.
-2. Click **Choose .csv file** and pick a UTF-8 CSV (max 256 KB) with one `source,target` pair per line:
+1. Click **Glossary** in the header. On first visit the modal seeds itself from the default glossary baked into the app (`app/dict.csv`).
+2. Click **Choose .csv file** and pick a UTF-8 CSV (max 256 KB, max 1000 entries) with one `source,target` pair per line:
 
    ```csv
    Kubernetes,クバネティス
@@ -38,18 +38,12 @@ Pin specific terms to a fixed translation so the model always renders them the s
    Gemini,ジェミニ
    ```
 
-3. Click **Upload & replace**. The upload **replaces** the entire glossary. The new entries take effect on the **next** session — click **Start Audio** again, or change languages to start a fresh connection. Live sessions keep the glossary they started with.
+3. Click **Load & replace**. The CSV is parsed in the browser and stored locally. Use **Reset to defaults** to restore the seed glossary.
+4. The new entries take effect on the **next** session — click **Start Audio** again, or change languages, to open a fresh WebSocket. Live sessions keep the glossary they started with.
 
-Status feedback appears below the entry count: green for success, red for parse errors (e.g. a line missing the comma) — in the error case the previous glossary stays in place.
+Status feedback appears below the entry count: green for success, red for parse errors (a line missing the comma, file too large, etc.) — in the error case the previous glossary stays in place.
 
-The same operations are exposed over HTTP for scripting:
-
-```bash
-curl http://localhost:8000/api/glossary                 # current entries
-curl -F file=@my_terms.csv http://localhost:8000/api/glossary  # replace
-```
-
-Uploads are persisted to `app/dict.csv`, which is also where the default glossary shipped with the repo lives. On Cloud Run the file lives for the lifetime of a container instance and is lost on cold start — for durable glossaries, bake the file into the image or back the path with a mounted volume / GCS.
+To change the **default** glossary that everyone sees on first visit, edit `app/dict.csv` and redeploy. The endpoint `GET /api/glossary/defaults` returns those defaults.
 
 ## Run
 

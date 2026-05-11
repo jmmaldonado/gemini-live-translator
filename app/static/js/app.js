@@ -310,7 +310,9 @@ function connectWebsocket() {
   websocket.onopen = function () {
     updateConnectionStatus(true);
     addSystemMessage("Connected to translation server");
-    addConsoleEntry('incoming', 'WebSocket Connected', { userId, sessionId, url: ws_url }, '🔌', 'system');
+    // First message must be the setup payload (carries the per-browser glossary).
+    websocket.send(JSON.stringify({ glossary: getGlossary() }));
+    addConsoleEntry('outgoing', 'WebSocket Connected', { userId, sessionId, url: ws_url, glossaryEntries: getGlossary().length }, '🔌', 'system');
   };
 
   websocket.onmessage = function (event) {
@@ -605,13 +607,76 @@ function audioRecorderHandler(pcmData) {
 }
 
 /**
- * Glossary modal
+ * Glossary (client-side, per browser)
+ *
+ * The glossary lives in this browser only — stored in localStorage and sent
+ * to the server as the first WebSocket message of each session. The server
+ * never persists it, so different browsers can run different glossaries
+ * concurrently.
  */
+const GLOSSARY_KEY = "live-translator.glossary.v1";
+const MAX_GLOSSARY_BYTES = 256 * 1024;
+const MAX_GLOSSARY_ENTRIES = 1000;
+
 const glossaryOverlay = document.getElementById("glossaryOverlay");
 const glossaryList = document.getElementById("glossaryList");
 const glossaryCount = document.getElementById("glossaryCount");
 const glossaryStatus = document.getElementById("glossaryStatus");
 const glossaryFile = document.getElementById("glossaryFile");
+
+let glossaryPairs = loadGlossaryFromStorage();
+
+function loadGlossaryFromStorage() {
+  try {
+    const raw = localStorage.getItem(GLOSSARY_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    return parsed.filter(p => p && typeof p.source === "string" && typeof p.target === "string");
+  } catch {
+    return null;
+  }
+}
+
+function saveGlossaryToStorage(pairs) {
+  try {
+    localStorage.setItem(GLOSSARY_KEY, JSON.stringify(pairs));
+  } catch (err) {
+    console.warn("Failed to persist glossary to localStorage:", err);
+  }
+}
+
+function getGlossary() {
+  return glossaryPairs || [];
+}
+
+function setGlossary(pairs) {
+  glossaryPairs = pairs;
+  saveGlossaryToStorage(pairs);
+}
+
+function parseGlossaryCsv(text) {
+  const pairs = [];
+  const lines = text.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.trim()) continue;
+    const idx = line.indexOf(",");
+    if (idx === -1) {
+      throw new Error(`Line ${i + 1} must be 'source,target'.`);
+    }
+    const source = line.slice(0, idx).trim();
+    const target = line.slice(idx + 1).trim();
+    if (!source || !target) {
+      throw new Error(`Line ${i + 1} is missing source or target.`);
+    }
+    pairs.push({ source, target });
+    if (pairs.length > MAX_GLOSSARY_ENTRIES) {
+      throw new Error(`Too many entries (max ${MAX_GLOSSARY_ENTRIES}).`);
+    }
+  }
+  return pairs;
+}
 
 function renderGlossary(pairs) {
   glossaryCount.textContent = pairs.length;
@@ -642,21 +707,31 @@ function setGlossaryStatus(text, kind) {
   glossaryStatus.className = "glossary-status" + (kind ? " " + kind : "");
 }
 
-async function loadGlossary() {
-  setGlossaryStatus("");
+async function fetchDefaultGlossary() {
+  const resp = await fetch("/api/glossary/defaults");
+  if (!resp.ok) throw new Error("HTTP " + resp.status);
+  const { pairs } = await resp.json();
+  return pairs;
+}
+
+async function ensureGlossarySeeded() {
+  if (glossaryPairs !== null) return;
   try {
-    const resp = await fetch("/api/glossary");
-    if (!resp.ok) throw new Error("HTTP " + resp.status);
-    const { pairs } = await resp.json();
-    renderGlossary(pairs);
+    const defaults = await fetchDefaultGlossary();
+    setGlossary(defaults);
   } catch (err) {
-    setGlossaryStatus("Failed to load: " + err.message, "error");
+    console.warn("Failed to seed default glossary:", err);
+    setGlossary([]);
   }
 }
 
+ensureGlossarySeeded();
+
 document.getElementById("openGlossary").addEventListener("click", async () => {
   glossaryOverlay.classList.remove("hidden");
-  await loadGlossary();
+  setGlossaryStatus("");
+  await ensureGlossarySeeded();
+  renderGlossary(getGlossary());
 });
 
 document.getElementById("closeGlossary").addEventListener("click", () => {
@@ -673,20 +748,40 @@ document.getElementById("uploadGlossary").addEventListener("click", async () => 
     setGlossaryStatus("Pick a .csv file first.", "error");
     return;
   }
-  setGlossaryStatus("Uploading…");
-  const form = new FormData();
-  form.append("file", file);
+  if (!file.name.toLowerCase().endsWith(".csv")) {
+    setGlossaryStatus("File must have a .csv extension.", "error");
+    return;
+  }
+  if (file.size > MAX_GLOSSARY_BYTES) {
+    setGlossaryStatus(`File exceeds ${MAX_GLOSSARY_BYTES} bytes.`, "error");
+    return;
+  }
   try {
-    const resp = await fetch("/api/glossary", { method: "POST", body: form });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.detail || ("HTTP " + resp.status));
-    renderGlossary(data.pairs);
+    const text = await file.text();
+    const pairs = parseGlossaryCsv(text);
+    setGlossary(pairs);
+    renderGlossary(pairs);
     setGlossaryStatus(
-      `Replaced with ${data.pairs.length} entries. Applies on next session.`,
+      `Replaced with ${pairs.length} entries. Applies on next session.`,
       "ok"
     );
     glossaryFile.value = "";
   } catch (err) {
-    setGlossaryStatus("Upload failed: " + err.message, "error");
+    setGlossaryStatus("Load failed: " + err.message, "error");
+  }
+});
+
+document.getElementById("resetGlossary").addEventListener("click", async () => {
+  try {
+    const defaults = await fetchDefaultGlossary();
+    setGlossary(defaults);
+    renderGlossary(defaults);
+    setGlossaryStatus(
+      `Reset to ${defaults.length} default entries. Applies on next session.`,
+      "ok"
+    );
+    glossaryFile.value = "";
+  } catch (err) {
+    setGlossaryStatus("Reset failed: " + err.message, "error");
   }
 });

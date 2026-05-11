@@ -769,3 +769,8 @@ button {
   font-size: 0.875rem;
 }
 .glossary-upload button:hover { filter: brightness(0.95); }
+.glossary-upload button.glossary-reset {
+  background: var(--input-bg);
+  color: var(--agent-text-color);
+  border: 1px solid var(--border-color);
+}

@@ -111,8 +111,8 @@ LANGUAGES = {
 DICT_PATH = Path(__file__).parent.parent / "dict.csv"
 
 
-def load_glossary_pairs() -> list[tuple[str, str]]:
-    """Read the current glossary CSV from disk and return (src, tgt) pairs."""
+def load_default_glossary() -> list[tuple[str, str]]:
+    """Read the seed glossary from dict.csv (used when a client sends none)."""
     if not DICT_PATH.exists():
         return []
     pairs: list[tuple[str, str]] = []
@@ -123,8 +123,7 @@ def load_glossary_pairs() -> list[tuple[str, str]]:
     return pairs
 
 
-def _glossary_section() -> str:
-    pairs = load_glossary_pairs()
+def _glossary_section(pairs: list[tuple[str, str]]) -> str:
     if not pairs:
         return ""
     lines = "\n".join(f"- {src} → {tgt}" for src, tgt in pairs)
@@ -138,10 +137,15 @@ def _glossary_section() -> str:
 MODEL = os.getenv("DEMO_AGENT_MODEL", "gemini-3.1-flash-live-preview")
 
 
-def create_agent(source_lang: str = "en", target_lang: str = "ja") -> Agent:
-    """Create a translator agent for the given language pair."""
+def create_agent(
+    source_lang: str = "en",
+    target_lang: str = "ja",
+    glossary_pairs: list[tuple[str, str]] | None = None,
+) -> Agent:
+    """Create a translator agent for the given language pair and glossary."""
     source_name = LANGUAGES.get(source_lang, source_lang)
     target_name = LANGUAGES.get(target_lang, target_lang)
+    pairs = glossary_pairs if glossary_pairs is not None else load_default_glossary()
     return Agent(
         name="live_translator",
         model=MODEL,
@@ -150,7 +154,7 @@ def create_agent(source_lang: str = "en", target_lang: str = "ja") -> Agent:
             f"Listen to the incoming audio and immediately output the translated "
             f"version in {target_name}, maintaining the speaker's original tone "
             f"and urgency."
-            + _glossary_section()
+            + _glossary_section(pairs)
         ),
     )
 
