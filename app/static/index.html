@@ -44,7 +44,12 @@
         <div class="modal-body">
           <p class="modal-hint">
             Replace this browser's glossary by loading a UTF-8 CSV with one
-            <code>source,target</code> pair per line. The glossary is stored
+            <code>source,target[,transcription]</code> per line. The optional
+            third column controls how the term appears in the on-screen
+            transcript — useful when you want a katakana pronunciation
+            (<code>target</code>) but a Latin display label
+            (<code>transcription</code>), e.g. <code>Vertex
+            AI,バーテックスエーアイ,Vertex AI</code>. The glossary is stored
             locally in your browser and sent with each new session — it never
             affects other users. Changes take effect on the next session
             (click <strong>Start Audio</strong> again, or change languages).

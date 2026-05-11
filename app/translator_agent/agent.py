@@ -110,23 +110,37 @@ LANGUAGES = {
 
 DICT_PATH = Path(__file__).parent.parent / "dict.csv"
 
+# Glossary entry: (source, target_spoken, transcription_display).
+# - source: the term in the source language the model should listen for
+# - target_spoken: how the model should pronounce it (drives the audio + the
+#   model's own output transcription)
+# - transcription_display: how the frontend should render it in the on-screen
+#   transcript. Defaults to target_spoken when absent. Server-side this column
+#   is purely round-tripped — only source + target_spoken affect the model.
+GlossaryEntry = tuple[str, str, str]
 
-def load_default_glossary() -> list[tuple[str, str]]:
+
+def load_default_glossary() -> list[GlossaryEntry]:
     """Read the seed glossary from dict.csv (used when a client sends none)."""
     if not DICT_PATH.exists():
         return []
-    pairs: list[tuple[str, str]] = []
+    entries: list[GlossaryEntry] = []
     with open(DICT_PATH, encoding="utf-8") as f:
         for row in csv.reader(f):
-            if len(row) >= 2 and row[0].strip() and row[1].strip():
-                pairs.append((row[0].strip(), row[1].strip()))
-    return pairs
+            if len(row) < 2:
+                continue
+            src, tgt = row[0].strip(), row[1].strip()
+            if not src or not tgt:
+                continue
+            disp = row[2].strip() if len(row) >= 3 and row[2].strip() else tgt
+            entries.append((src, tgt, disp))
+    return entries
 
 
-def _glossary_section(pairs: list[tuple[str, str]]) -> str:
-    if not pairs:
+def _glossary_section(entries: list[GlossaryEntry]) -> str:
+    if not entries:
         return ""
-    lines = "\n".join(f"- {src} → {tgt}" for src, tgt in pairs)
+    lines = "\n".join(f"- {src} → {tgt}" for src, tgt, _ in entries)
     return (
         "\n\nUse the following glossary for specific terms. "
         "When you hear these words, always use the paired translation:\n"
@@ -140,12 +154,14 @@ MODEL = os.getenv("DEMO_AGENT_MODEL", "gemini-3.1-flash-live-preview")
 def create_agent(
     source_lang: str = "en",
     target_lang: str = "ja",
-    glossary_pairs: list[tuple[str, str]] | None = None,
+    glossary_entries: list[GlossaryEntry] | None = None,
 ) -> Agent:
     """Create a translator agent for the given language pair and glossary."""
     source_name = LANGUAGES.get(source_lang, source_lang)
     target_name = LANGUAGES.get(target_lang, target_lang)
-    pairs = glossary_pairs if glossary_pairs is not None else load_default_glossary()
+    entries = (
+        glossary_entries if glossary_entries is not None else load_default_glossary()
+    )
     return Agent(
         name="live_translator",
         model=MODEL,
@@ -154,7 +170,7 @@ def create_agent(
             f"Listen to the incoming audio and immediately output the translated "
             f"version in {target_name}, maintaining the speaker's original tone "
             f"and urgency."
-            + _glossary_section(pairs)
+            + _glossary_section(entries)
         ),
     )
 

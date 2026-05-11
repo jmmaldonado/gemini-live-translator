@@ -118,6 +118,7 @@ let currentInputTranscriptionId = null;
 let currentInputTranscriptionElement = null;
 let currentOutputTranscriptionId = null;
 let currentOutputTranscriptionElement = null;
+let currentOutputRawText = "";
 let inputTranscriptionFinished = false;
 let hasOutputTranscriptionInTurn = false;
 
@@ -382,6 +383,7 @@ function connectWebsocket() {
       currentBubbleElement = null;
       currentOutputTranscriptionId = null;
       currentOutputTranscriptionElement = null;
+      currentOutputRawText = "";
       inputTranscriptionFinished = false;
       hasOutputTranscriptionInTurn = false;
       return;
@@ -406,6 +408,7 @@ function connectWebsocket() {
       currentBubbleElement = null;
       currentOutputTranscriptionId = null;
       currentOutputTranscriptionElement = null;
+      currentOutputRawText = "";
       inputTranscriptionFinished = false;
       hasOutputTranscriptionInTurn = false;
       return;
@@ -465,23 +468,25 @@ function connectWebsocket() {
 
         if (currentOutputTranscriptionId == null) {
           currentOutputTranscriptionId = Math.random().toString(36).substring(7);
-          currentOutputTranscriptionElement = createMessageBubble(transcriptionText, false, !isFinished);
+          currentOutputRawText = transcriptionText;
+          currentOutputTranscriptionElement = createMessageBubble(applyDisplayMap(currentOutputRawText), false, !isFinished);
           currentOutputTranscriptionElement.id = currentOutputTranscriptionId;
           currentOutputTranscriptionElement.classList.add("transcription");
           messagesDiv.appendChild(currentOutputTranscriptionElement);
         } else {
           if (isFinished) {
-            updateMessageBubble(currentOutputTranscriptionElement, transcriptionText, false);
+            currentOutputRawText = transcriptionText;
+            updateMessageBubble(currentOutputTranscriptionElement, applyDisplayMap(currentOutputRawText), false);
           } else {
-            const existingText = currentOutputTranscriptionElement.querySelector(".bubble-text").textContent;
-            const cleanText = existingText.replace(/\.\.\.$/, '');
-            updateMessageBubble(currentOutputTranscriptionElement, cleanText + transcriptionText, true);
+            currentOutputRawText += transcriptionText;
+            updateMessageBubble(currentOutputTranscriptionElement, applyDisplayMap(currentOutputRawText), true);
           }
         }
 
         if (isFinished) {
           currentOutputTranscriptionId = null;
           currentOutputTranscriptionElement = null;
+          currentOutputRawText = "";
         }
         scrollToBottom();
       }
@@ -614,7 +619,7 @@ function audioRecorderHandler(pcmData) {
  * never persists it, so different browsers can run different glossaries
  * concurrently.
  */
-const GLOSSARY_KEY = "live-translator.glossary.v1";
+const GLOSSARY_KEY = "live-translator.glossary.v2";
 const MAX_GLOSSARY_BYTES = 256 * 1024;
 const MAX_GLOSSARY_ENTRIES = 1000;
 
@@ -625,6 +630,17 @@ const glossaryStatus = document.getElementById("glossaryStatus");
 const glossaryFile = document.getElementById("glossaryFile");
 
 let glossaryPairs = loadGlossaryFromStorage();
+let glossaryDisplayMap = buildDisplayMap(glossaryPairs);
+
+function normalizeEntry(p) {
+  if (!p || typeof p.source !== "string" || typeof p.target !== "string") return null;
+  const source = p.source;
+  const target = p.target;
+  const transcription = typeof p.transcription === "string" && p.transcription.length
+    ? p.transcription
+    : target;
+  return { source, target, transcription };
+}
 
 function loadGlossaryFromStorage() {
   try {
@@ -632,7 +648,7 @@ function loadGlossaryFromStorage() {
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return null;
-    return parsed.filter(p => p && typeof p.source === "string" && typeof p.target === "string");
+    return parsed.map(normalizeEntry).filter(Boolean);
   } catch {
     return null;
   }
@@ -650,9 +666,31 @@ function getGlossary() {
   return glossaryPairs || [];
 }
 
+function buildDisplayMap(pairs) {
+  const map = [];
+  for (const p of pairs || []) {
+    if (p.transcription && p.transcription !== p.target) {
+      map.push([p.target, p.transcription]);
+    }
+  }
+  // Apply longer targets first so a longer match wins over a shorter prefix.
+  map.sort((a, b) => b[0].length - a[0].length);
+  return map;
+}
+
+function applyDisplayMap(text) {
+  if (!text || !glossaryDisplayMap.length) return text;
+  let out = text;
+  for (const [from, to] of glossaryDisplayMap) {
+    if (out.includes(from)) out = out.split(from).join(to);
+  }
+  return out;
+}
+
 function setGlossary(pairs) {
-  glossaryPairs = pairs;
-  saveGlossaryToStorage(pairs);
+  glossaryPairs = pairs.map(normalizeEntry).filter(Boolean);
+  glossaryDisplayMap = buildDisplayMap(glossaryPairs);
+  saveGlossaryToStorage(glossaryPairs);
 }
 
 function parseGlossaryCsv(text) {
@@ -661,16 +699,19 @@ function parseGlossaryCsv(text) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (!line.trim()) continue;
-    const idx = line.indexOf(",");
-    if (idx === -1) {
-      throw new Error(`Line ${i + 1} must be 'source,target'.`);
+    // Split into at most 3 fields so that the 2nd and 3rd may themselves
+    // contain commas? The spec is simple CSV; we don't support quoted commas.
+    const parts = line.split(",");
+    if (parts.length < 2) {
+      throw new Error(`Line ${i + 1} must be 'source,target' (3rd column optional).`);
     }
-    const source = line.slice(0, idx).trim();
-    const target = line.slice(idx + 1).trim();
+    const source = parts[0].trim();
+    const target = parts[1].trim();
+    const transcription = (parts.length >= 3 ? parts.slice(2).join(",").trim() : "") || target;
     if (!source || !target) {
       throw new Error(`Line ${i + 1} is missing source or target.`);
     }
-    pairs.push({ source, target });
+    pairs.push({ source, target, transcription });
     if (pairs.length > MAX_GLOSSARY_ENTRIES) {
       throw new Error(`Too many entries (max ${MAX_GLOSSARY_ENTRIES}).`);
     }
@@ -684,22 +725,33 @@ function renderGlossary(pairs) {
     glossaryList.innerHTML = '<div class="glossary-empty">No glossary entries.</div>';
     return;
   }
-  glossaryList.innerHTML = "";
-  for (const { source, target } of pairs) {
-    const row = document.createElement("div");
-    row.className = "glossary-row";
-    const src = document.createElement("span");
-    src.className = "glossary-src";
-    src.textContent = source;
-    const arrow = document.createElement("span");
-    arrow.className = "glossary-arrow";
-    arrow.textContent = "→";
-    const tgt = document.createElement("span");
-    tgt.className = "glossary-tgt";
-    tgt.textContent = target;
-    row.append(src, arrow, tgt);
-    glossaryList.appendChild(row);
+  const table = document.createElement("table");
+  table.className = "glossary-table";
+
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  for (const label of ["Source", "Pronunciation", "Transcript"]) {
+    const th = document.createElement("th");
+    th.textContent = label;
+    headRow.appendChild(th);
   }
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  for (const { source, target, transcription } of pairs) {
+    const tr = document.createElement("tr");
+    for (const value of [source, target, transcription || target]) {
+      const td = document.createElement("td");
+      td.textContent = value;
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+
+  glossaryList.innerHTML = "";
+  glossaryList.appendChild(table);
 }
 
 function setGlossaryStatus(text, kind) {

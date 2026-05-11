@@ -29,21 +29,26 @@ GOOGLE_API_KEY=your-api-key
 
 Pin specific terms to a fixed translation so the model always renders them the same way. **The glossary is per browser** — it's stored in your browser's `localStorage` and sent to the server only when you start a session. Different visitors can run different glossaries at the same time without affecting each other; nothing is persisted server-side.
 
-1. Click **Glossary** in the header. On first visit the modal seeds itself from the default glossary baked into the app (`app/dict.csv`).
-2. Click **Choose .csv file** and pick a UTF-8 CSV (max 256 KB, max 1000 entries) with one `source,target` pair per line:
+1. Click **Glossary** in the header. On first visit the modal seeds itself from the default glossary baked into the app (`app/dict.csv`). Entries are shown in a three-column table: **Source / Pronunciation / Transcript**.
+2. Click **Choose .csv file** and pick a UTF-8 CSV (max 256 KB, max 1000 entries). Each line is `source,target[,transcription]`:
 
    ```csv
-   Kubernetes,クバネティス
-   Cloud Run,クラウドラン
-   Gemini,ジェミニ
+   Kubernetes,クバネティス,Kubernetes
+   Cloud Run,クラウドラン,Cloud Run
+   Gemini,ジェミニ,Gemini
+   Vertex AI,バーテックスエーアイ,Vertex AI
    ```
 
-3. Click **Load & replace**. The CSV is parsed in the browser and stored locally. Use **Reset to defaults** to restore the seed glossary.
+   The optional **third column** is a display override. The model still pronounces the term using `target` (so the audio sounds right), but the on-screen transcript renders `transcription` in place of `target`. Useful for proper nouns where you want a phonetic pronunciation but a Latin display label. When omitted, the transcript shows `target` as-is. The replacement happens client-side, so it never affects what the model emits — only what you see.
+
+3. Click **Load & replace**. The CSV is parsed in the browser and stored locally. Use **Reset to defaults** to discard your customisations and re-fetch the seed glossary from the server.
 4. The new entries take effect on the **next** session — click **Start Audio** again, or change languages, to open a fresh WebSocket. Live sessions keep the glossary they started with.
 
 Status feedback appears below the entry count: green for success, red for parse errors (a line missing the comma, file too large, etc.) — in the error case the previous glossary stays in place.
 
-To change the **default** glossary that everyone sees on first visit, edit `app/dict.csv` and redeploy. The endpoint `GET /api/glossary/defaults` returns those defaults.
+### Changing the default glossary
+
+Edit `app/dict.csv` and redeploy. The endpoint `GET /api/glossary/defaults` returns those defaults. Browsers that already have a cached glossary in `localStorage` will keep using it — they need to either click **Reset to defaults** in the modal, or the app needs to bump the storage key (`GLOSSARY_KEY` in `app/static/js/app.js`) to force a one-time re-seed on next load.
 
 ## Run
 
@@ -57,14 +62,29 @@ Open http://localhost:8000 and click **Start Audio** to begin translating.
 
 Uses ADK's 4-phase bidi-streaming lifecycle over WebSocket:
 
-1. **App init** — FastAPI server, Agent (`gemini-3.1-flash-live-preview`), Runner, SessionService
-2. **Session init** — RunConfig with AUDIO modality, transcription, session resumption
-3. **Active streaming** — Concurrent upstream (mic → LiveRequestQueue) and downstream (run_live → WebSocket) tasks
-4. **Termination** — `LiveRequestQueue.close()` on disconnect
+1. **App init** — FastAPI server, default Agent (`gemini-3.1-flash-live-preview`), Runner, in-memory SessionService.
+2. **Session init** — On WebSocket connect the server reads a JSON setup message (`{glossary: [...]}`) sent by the browser as the first frame, then constructs a per-connection Agent whose system instruction includes that glossary. RunConfig is set up with AUDIO modality, input/output transcription, and session resumption.
+3. **Active streaming** — Concurrent upstream (mic → `LiveRequestQueue`) and downstream (`run_live` → WebSocket) tasks. The frontend swaps `target` → `transcription` on incoming output-transcription text before rendering.
+4. **Termination** — `LiveRequestQueue.close()` on disconnect.
 
 ## Model
 
 Uses `gemini-3.1-flash-live-preview` with the Gemini API (`generativelanguage.googleapis.com`). This is a native audio model supporting real-time audio input/output with transcription. The app sends audio via `realtime_input` (audio blobs).
+
+The system instruction is built in `app/translator_agent/agent.py` as:
+
+```
+You are a real-time translator from {source} to {target}. Listen to the
+incoming audio and immediately output the translated version in {target},
+maintaining the speaker's original tone and urgency.
+
+Use the following glossary for specific terms. When you hear these words,
+always use the paired translation:
+- <source> → <target>
+...
+```
+
+Only the first two CSV columns reach the model; the third (transcript display) is purely a frontend post-processing rule.
 
 ## Deployment to Cloud Run
 

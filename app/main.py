@@ -91,25 +91,32 @@ async def get_languages():
 @app.get("/api/glossary/defaults")
 async def get_default_glossary():
     """Return the seed glossary baked into the image (used when localStorage is empty)."""
-    pairs = load_default_glossary()
-    return {"pairs": [{"source": s, "target": t} for s, t in pairs]}
+    entries = load_default_glossary()
+    return {
+        "pairs": [
+            {"source": s, "target": t, "transcription": d} for s, t, d in entries
+        ]
+    }
 
 
-def _parse_setup(raw: str) -> list[tuple[str, str]]:
-    """Parse the client's setup message and return validated glossary pairs."""
+def _parse_setup(raw: str) -> list[tuple[str, str, str]]:
+    """Parse the client's setup message into validated glossary triples."""
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
         return []
-    pairs: list[tuple[str, str]] = []
+    entries: list[tuple[str, str, str]] = []
     for entry in (data.get("glossary") or [])[:MAX_GLOSSARY_ENTRIES]:
         if not isinstance(entry, dict):
             continue
         src = (entry.get("source") or "").strip()
         tgt = (entry.get("target") or "").strip()
-        if src and tgt:
-            pairs.append((src, tgt))
-    return pairs
+        if not src or not tgt:
+            continue
+        disp_raw = entry.get("transcription")
+        disp = disp_raw.strip() if isinstance(disp_raw, str) and disp_raw.strip() else tgt
+        entries.append((src, tgt, disp))
+    return entries
 
 
 @app.websocket("/ws/{user_id}/{session_id}")
@@ -135,13 +142,13 @@ async def websocket_endpoint(
     # Wait for the client's setup message (carries the per-session glossary).
     # Falls back to the on-disk default glossary if the client doesn't send one
     # within SETUP_TIMEOUT_SEC (older clients, network hiccups).
-    glossary_pairs: list[tuple[str, str]] | None = None
+    glossary_entries: list[tuple[str, str, str]] | None = None
     try:
         setup_raw = await asyncio.wait_for(
             websocket.receive_text(), timeout=SETUP_TIMEOUT_SEC
         )
-        glossary_pairs = _parse_setup(setup_raw)
-        logger.debug("Setup received: %d glossary entries", len(glossary_pairs))
+        glossary_entries = _parse_setup(setup_raw)
+        logger.debug("Setup received: %d glossary entries", len(glossary_entries))
     except asyncio.TimeoutError:
         logger.warning(
             "No setup message within %ds; using default glossary.", SETUP_TIMEOUT_SEC
@@ -151,7 +158,7 @@ async def websocket_endpoint(
         return
 
     # Create per-connection agent and runner for the selected language pair
-    connection_agent = create_agent(source, target, glossary_pairs)
+    connection_agent = create_agent(source, target, glossary_entries)
     connection_runner = Runner(
         app_name=APP_NAME, agent=connection_agent, session_service=session_service
     )
