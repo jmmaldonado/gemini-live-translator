@@ -129,15 +129,6 @@ Key flags:
 - `--max-instances 1` — sufficient for demo; increase for production
 
 
-## ADK/SDK Compatibility Patches
+## SDK Compatibility Note
 
-ADK 1.32.0 still needs two small adjustments in `app/main.py` to talk to `gemini-3.1-flash-live-preview` over the Gemini API:
-
-1. **Remove Vertex AI env vars** — The genai SDK auto-detects `GOOGLE_CLOUD_PROJECT`/`GOOGLE_CLOUD_LOCATION` and routes to `aiplatform.googleapis.com`. We pop these env vars to force Gemini API key routing via `generativelanguage.googleapis.com`. (SDK behavior, not an ADK bug.)
-
-2. **API version `v1alpha` → `v1beta`** — ADK still defaults `Gemini._live_api_version` to `v1alpha` for AI Studio API-key auth, but `gemini-3.1-flash-live-preview` is only served on `v1beta`. Tracked in [google/adk-python#5075](https://github.com/google/adk-python/issues/5075).
-
-Previously tracked issues that are **fixed upstream** and no longer require local workarounds:
-
-- **Audio + text routing for Gemini 3.1 Live** ([#5018](https://github.com/google/adk-python/issues/5018)) — fixed in v1.29.0 (commit [`ee69661`](https://github.com/google/adk-python/commit/ee69661a616056fa89e0ec2188aaa59bd714d8c9)). ADK now routes input through `send_realtime_input` for the 3.1 model, so the prior "audio-only / no `client_content`" workaround is gone.
-- **Session resumption / transparent reconnection** ([#4996](https://github.com/google/adk-python/issues/4996)) — fixed in v1.32.0. The reconnection loop in `base_llm_flow.py` now iterates on `ConnectionClosed` and recoverable `APIError`s, sets `session_resumption.transparent = True`, and skips replaying history when a resumption handle exists.
+`app/main.py` pops `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_CLOUD_PROJECT`, and `GOOGLE_CLOUD_LOCATION` before importing the agent. The genai SDK auto-detects these and would otherwise route requests to `aiplatform.googleapis.com`; clearing them forces Gemini API key routing via `generativelanguage.googleapis.com`.
