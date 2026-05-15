@@ -130,6 +130,53 @@ Key flags:
 - `--max-instances 1` — required as written, because session-resumption handles are kept in an in-memory dict on the server. Going multi-replica would route a browser reconnect to a different instance with no handle, defeating resumption. Use a shared store (e.g. Redis) before raising this.
 
 
+## Testing
+
+### Soak Test
+
+`test_long.py` is a long-running automated test that validates translation quality, latency, glossary behavior, and session stability over extended periods (default 1 hour).
+
+It generates random English sentences via Gemini Flash Lite, converts them to audio with Google Cloud TTS, streams them through the translator WebSocket, transcribes the returned audio with Google Cloud STT, and verifies semantic correctness.
+
+```bash
+uv sync --extra test
+
+# 2-minute smoke test against local server
+uv run python test_long.py --duration 120
+
+# 1-hour test against Cloud Run
+uv run python test_long.py --url wss://YOUR_CLOUD_RUN_URL --duration 3600
+```
+
+Options:
+- `--url` — WebSocket base URL (default: `ws://localhost:8000`)
+- `--duration` — Test duration in seconds (default: 3600)
+- `--source` / `--target` — Language pair (default: en / ja)
+- `--log` — Path to JSONL metrics log (default: auto-generated `soak_YYYYMMDD_HHMMSS.jsonl`)
+
+The test exercises session resumption and GoAway handling by running on a single persistent WebSocket for the entire duration.
+
+#### Metrics logged per iteration
+
+Each iteration writes a JSON line to the log file with:
+
+| Field | Description |
+|---|---|
+| `first_response_sec` | Time from end of speech to first model response (typically near 0 — the model processes audio in real-time) |
+| `turn_complete_sec` | Time from end of speech to `turnComplete` (user-perceived latency for the full translation) |
+| `elapsed_sec` | Total iteration time including TTS, STT, and verification |
+| `score` | Semantic translation quality (0-10, via Gemini Flash Lite) |
+| `input_transcription_score` | Input transcription accuracy (0-10) |
+| `output_transcription_score` | Output transcription accuracy (0-10) |
+| `glossary_found` | Whether the glossary display term appeared in output (every 3rd iteration) |
+
+Load the JSONL with pandas for visualization:
+
+```python
+import pandas as pd
+df = pd.read_json("soak_20260515_220413.jsonl", lines=True)
+```
+
 ## SDK Compatibility Note
 
 `app/main.py` pops `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_CLOUD_PROJECT`, and `GOOGLE_CLOUD_LOCATION` before constructing the genai client. The SDK auto-detects these and would otherwise route requests to `aiplatform.googleapis.com`; clearing them forces Gemini API key routing via `generativelanguage.googleapis.com`.

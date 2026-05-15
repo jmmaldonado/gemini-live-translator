@@ -636,6 +636,7 @@ dependencies = [
 
 [package.optional-dependencies]
 test = [
+    { name = "certifi" },
     { name = "google-cloud-speech" },
     { name = "google-cloud-texttospeech" },
     { name = "websockets" },
@@ -643,6 +644,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "certifi", marker = "extra == 'test'" },
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "google-cloud-speech", marker = "extra == 'test'", specifier = ">=2.28.0" },
     { name = "google-cloud-texttospeech", marker = "extra == 'test'", specifier = ">=2.17.0" },

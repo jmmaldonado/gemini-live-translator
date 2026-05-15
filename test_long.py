@@ -16,11 +16,14 @@ import asyncio
 import base64
 import json
 import os
+import ssl
 import sys
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
+import certifi
 import websockets
 from dotenv import load_dotenv
 from google import genai
@@ -176,6 +179,7 @@ class IterationResult:
     error: str | None = None
     elapsed: float = 0.0
     first_response_sec: float | None = None
+    turn_complete_sec: float | None = None
     glossary_term: str | None = None
     glossary_found: bool | None = None
     input_transcription_score: float | None = None
@@ -365,7 +369,8 @@ async def run_iteration(
     audio_chunks: list[bytes] = []
     turn_complete = asyncio.Event()
     first_response_at: list[float] = []
-    send_done_at: list[float] = []
+    speech_done_at: list[float] = []
+    turn_complete_at: list[float] = []
 
     async def receive_responses():
         try:
@@ -400,6 +405,7 @@ async def run_iteration(
                     first_response_at.append(time.monotonic())
 
                 if msg.get("turnComplete"):
+                    turn_complete_at.append(time.monotonic())
                     turn_complete.set()
         except asyncio.TimeoutError:
             pass
@@ -422,6 +428,8 @@ async def run_iteration(
         offset += CHUNK_SIZE
         await asyncio.sleep(CHUNK_INTERVAL)
 
+    speech_done_at.append(time.monotonic())
+
     # Trailing silence for VAD
     silence = b"\x00" * CHUNK_SIZE
     for _ in range(int(SILENCE_AFTER_SPEECH / CHUNK_INTERVAL)):
@@ -430,8 +438,6 @@ async def run_iteration(
         except websockets.ConnectionClosed:
             break
         await asyncio.sleep(CHUNK_INTERVAL)
-
-    send_done_at.append(time.monotonic())
 
     # Wait for response
     try:
@@ -445,12 +451,15 @@ async def run_iteration(
     except asyncio.CancelledError:
         pass
 
-    # Latency: time from end of audio send to first response
+    # Latency metrics, both measured from end of speech audio (before silence):
+    # - first_resp_sec: time to first audio/transcription chunk
+    # - turn_complete_sec: time to turnComplete (full translation delivered)
     first_resp_sec = None
-    if first_response_at and send_done_at:
-        first_resp_sec = first_response_at[0] - send_done_at[0]
-        if first_resp_sec < 0:
-            first_resp_sec = first_response_at[0] - t0
+    if first_response_at and speech_done_at:
+        first_resp_sec = max(0.0, first_response_at[0] - speech_done_at[0])
+    turn_comp_sec = None
+    if turn_complete_at and speech_done_at:
+        turn_comp_sec = max(0.0, turn_complete_at[0] - speech_done_at[0])
 
     input_text = (
         input_transcription_final[-1]
@@ -512,6 +521,7 @@ async def run_iteration(
             error="no response",
             elapsed=time.monotonic() - t0,
             first_response_sec=first_resp_sec,
+            turn_complete_sec=turn_comp_sec,
             glossary_term=glossary_term,
             glossary_found=glossary_found,
             input_transcription_score=input_tx_score,
@@ -532,6 +542,7 @@ async def run_iteration(
             error=f"verify: {e}",
             elapsed=time.monotonic() - t0,
             first_response_sec=first_resp_sec,
+            turn_complete_sec=turn_comp_sec,
             glossary_term=glossary_term,
             glossary_found=glossary_found,
             input_transcription_score=input_tx_score,
@@ -549,6 +560,7 @@ async def run_iteration(
         reason=reason,
         elapsed=time.monotonic() - t0,
         first_response_sec=first_resp_sec,
+        turn_complete_sec=turn_comp_sec,
         glossary_term=glossary_term,
         glossary_found=glossary_found,
         input_transcription_score=input_tx_score,
@@ -562,11 +574,12 @@ def _format_tags(result: IterationResult) -> tuple[str, str, str, str]:
         display = display[:37] + "..."
 
     latency_tag = ""
-    if result.first_response_sec is not None:
-        if result.first_response_sec > LATENCY_THRESHOLD:
-            latency_tag = f" SLOW({result.first_response_sec:.1f}s)"
+    tc = result.turn_complete_sec
+    if tc is not None:
+        if tc > LATENCY_THRESHOLD:
+            latency_tag = f" SLOW({tc:.1f}s)"
         else:
-            latency_tag = f" {result.first_response_sec:.1f}s"
+            latency_tag = f" {tc:.1f}s"
 
     glossary_tag = ""
     if result.glossary_term:
@@ -595,6 +608,11 @@ async def main():
     parser.add_argument("--duration", type=int, default=3600, help="Test duration in seconds")
     parser.add_argument("--source", default="en", help="Source language code")
     parser.add_argument("--target", default="ja", help="Target language code")
+    parser.add_argument(
+        "--log",
+        default=None,
+        help="Path to JSONL log file for per-iteration metrics (default: auto-generated)",
+    )
     args = parser.parse_args()
 
     ws_url = f"{args.url}/ws/soak-test/soak-session-001?source={args.source}&target={args.target}"
@@ -603,15 +621,22 @@ async def main():
     tts_client = texttospeech.TextToSpeechClient()
     stt_client = speech.SpeechClient()
 
+    log_path = args.log or f"soak_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.jsonl"
+    log_file = open(log_path, "a")
+
     stats = Stats()
     start = time.monotonic()
     glossary_cycle = iter(range(len(TEST_GLOSSARY)))
 
     print(f"[{stamp()}] Starting soak test: {args.source} -> {args.target}, duration={args.duration}s")
     print(f"[{stamp()}] Glossary: {len(TEST_GLOSSARY)} entries")
+    print(f"[{stamp()}] Logging metrics to {log_path}")
     print(f"[{stamp()}] Connecting to {ws_url}")
 
-    async with websockets.connect(ws_url) as ws:
+    ssl_ctx = None
+    if ws_url.startswith("wss://"):
+        ssl_ctx = ssl.create_default_context(cafile=certifi.where())
+    async with websockets.connect(ws_url, ssl=ssl_ctx) as ws:
         await ws.send(json.dumps({"glossary": TEST_GLOSSARY}))
         print(f"[{stamp()}] Connected, setup sent with glossary")
 
@@ -634,9 +659,30 @@ async def main():
             )
             stats.results.append(result)
 
-            # Latency stats
-            if result.first_response_sec is not None:
-                if result.first_response_sec <= LATENCY_THRESHOLD:
+            log_file.write(json.dumps({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "iteration": result.index,
+                "original": result.original,
+                "input_transcription": result.input_transcription,
+                "output_transcription": result.output_transcription,
+                "stt_transcription": result.stt_transcription,
+                "passed": result.passed,
+                "score": result.score,
+                "reason": result.reason or None,
+                "error": result.error,
+                "elapsed_sec": round(result.elapsed, 2),
+                "first_response_sec": round(result.first_response_sec, 2) if result.first_response_sec is not None else None,
+                "turn_complete_sec": round(result.turn_complete_sec, 2) if result.turn_complete_sec is not None else None,
+                "glossary_term": result.glossary_term,
+                "glossary_found": result.glossary_found,
+                "input_transcription_score": result.input_transcription_score,
+                "output_transcription_score": result.output_transcription_score,
+            }, ensure_ascii=False) + "\n")
+            log_file.flush()
+
+            # Latency stats (based on turn_complete — user-perceived latency)
+            if result.turn_complete_sec is not None:
+                if result.turn_complete_sec <= LATENCY_THRESHOLD:
                     stats.latency_ok += 1
                 else:
                     stats.latency_slow += 1
@@ -698,9 +744,15 @@ async def main():
         f"({100 * stats.passed / stats.iterations:.1f}%) | "
         f"Avg score: {avg_score:.1f}/10 | Errors: {stats.errors}"
     )
+    tc_latencies = [r.turn_complete_sec for r in stats.results if r.turn_complete_sec is not None]
+    fr_latencies = [r.first_response_sec for r in stats.results if r.first_response_sec is not None]
     if latency_measured:
+        avg_tc = sum(tc_latencies) / len(tc_latencies) if tc_latencies else 0
+        avg_fr = sum(fr_latencies) / len(fr_latencies) if fr_latencies else 0
         print(
-            f"Latency (<{LATENCY_THRESHOLD}s): {stats.latency_ok}/{latency_measured} "
+            f"Latency (speech-end → done): avg {avg_tc:.1f}s | "
+            f"first-response avg {avg_fr:.1f}s | "
+            f"<{LATENCY_THRESHOLD}s: {stats.latency_ok}/{latency_measured} "
             f"({100 * stats.latency_ok / latency_measured:.1f}%) | "
             f"Slow: {stats.latency_slow}"
         )
@@ -722,6 +774,8 @@ async def main():
             f"(n={len(stats.output_transcription_scores)})"
         )
 
+    log_file.close()
+    print(f"[{stamp()}] Metrics log: {log_path}")
     sys.exit(0 if stats.errors == 0 and stats.passed > 0 else 1)
 
 
