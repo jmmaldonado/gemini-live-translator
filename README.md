@@ -60,11 +60,13 @@ Open http://localhost:8000 and click **Start Audio** to begin translating.
 
 ## Architecture
 
-FastAPI bridges a browser WebSocket to one Gemini Live API session per connection via `google-genai`'s `client.aio.live.connect(...)`:
+FastAPI bridges one browser WebSocket to a series of Gemini Live API sessions via `google-genai`'s `client.aio.live.connect(...)`. The browser WS lives for the lifetime of the user's tab; upstream Live sessions are opened, expire, and reopened underneath it without the browser noticing.
 
-1. **Session init** — On WebSocket connect the server reads a JSON setup message (`{glossary: [...]}`) sent by the browser as the first frame, builds a per-connection system instruction that embeds the glossary, and opens a `LiveConnectConfig` with AUDIO modality, input/output transcription, and session resumption. If a resumption handle is already stored for the URL's `session_id` (browser reconnect within the Live API's ~10 min window), it's passed in `SessionResumptionConfig(handle=...)` so the upstream session picks up where it left off; otherwise the connection starts fresh.
-2. **Active streaming** — Concurrent upstream (mic → `session.send_realtime_input(audio=...)`) and downstream (`session.receive()` → WebSocket) tasks. `session.receive()` is per-turn, so the downstream loop wraps it in an outer loop to span multiple turns. Each `session_resumption_update` frame from the server is captured and stored in-memory keyed by `session_id` for the next reconnect. The server translates each `LiveServerMessage` into a small camelCase JSON envelope the frontend expects (`turnComplete`, `inputTranscription`, `outputTranscription`, `content.parts[]`, `usageMetadata`). The frontend swaps `target` → `transcription` on incoming output-transcription text before rendering.
-3. **Termination** — When either side finishes (client disconnects or live session ends), `asyncio.wait(FIRST_COMPLETED)` cancels its partner and the `async with` exits, closing the upstream connection to Google.
+1. **Browser session start** — The browser opens a WebSocket to `/ws/{user_id}/{session_id}` and sends a JSON setup frame (`{glossary: [...]}`). The server parses it and builds a per-connection system instruction that embeds the glossary.
+2. **Upstream session loop** — A background coroutine repeatedly opens `client.aio.live.connect(model, config)` with `LiveConnectConfig(response_modalities=[AUDIO], input/output_audio_transcription=…, session_resumption=…)`. Each open passes any stored resumption handle for `session_id` so the model picks up where it left off; on each `session_resumption_update.new_handle` from the server, the latest handle is stored in-memory (keyed by `session_id`, lazily evicted after the Live API's ~10 min window). When the upstream session expires — Live API sessions cap out around 15 min and apply shorter idle timeouts — the loop simply opens another one with the freshest handle. The browser WebSocket stays open across every reopen.
+3. **Audio bridge** — A separate coroutine pulls binary audio frames from the browser WS and forwards them to whichever upstream session is current via `send_realtime_input(audio=...)`. Frames that arrive during the sub-second window between upstream sessions are dropped; resumption preserves model context across the gap, so the speaker doesn't notice.
+4. **Wire format** — Each `LiveServerMessage` from upstream is translated into a small camelCase JSON envelope the frontend understands (`turnComplete`, `inputTranscription`, `outputTranscription`, `content.parts[]`, `usageMetadata`). The frontend swaps `target` → `transcription` on incoming output-transcription text before rendering.
+5. **Termination** — The handler only exits when the browser disconnects (or on a fatal error). Upstream sessions are torn down implicitly each time the inner `async with` exits and re-enters.
 
 ## Model
 
@@ -123,11 +125,11 @@ gcloud run deploy live-translation \
 ```
 
 Key flags:
-- `--timeout 3600` — Live API sessions can be long-lived (up to 1 hour)
-- `--min-instances 1` — avoids cold start latency for WebSocket connections
-- `--max-instances 1` — sufficient for demo; increase for production
+- `--timeout 3600` — the browser WebSocket can hold a single conversation for up to an hour, even though the upstream Live sessions inside it cycle every ~15 min.
+- `--min-instances 1` — avoids cold start latency for WebSocket connections.
+- `--max-instances 1` — required as written, because session-resumption handles are kept in an in-memory dict on the server. Going multi-replica would route a browser reconnect to a different instance with no handle, defeating resumption. Use a shared store (e.g. Redis) before raising this.
 
 
 ## SDK Compatibility Note
 
-`app/main.py` pops `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_CLOUD_PROJECT`, and `GOOGLE_CLOUD_LOCATION` before importing the agent. The genai SDK auto-detects these and would otherwise route requests to `aiplatform.googleapis.com`; clearing them forces Gemini API key routing via `generativelanguage.googleapis.com`.
+`app/main.py` pops `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_CLOUD_PROJECT`, and `GOOGLE_CLOUD_LOCATION` before constructing the genai client. The SDK auto-detects these and would otherwise route requests to `aiplatform.googleapis.com`; clearing them forces Gemini API key routing via `generativelanguage.googleapis.com`.
