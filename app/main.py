@@ -298,41 +298,98 @@ async def websocket_endpoint(
             async with client.aio.live.connect(model=MODEL, config=config) as session:
                 current_session = session
                 try:
-                    go_away_received = False
-                    while True:
-                        saw_message = False
-                        async for msg in session.receive():
-                            saw_message = True
-                            if msg.go_away is not None:
-                                logger.info(
-                                    "GoAway received (time_left=%s); "
-                                    "will reopen after current turn",
-                                    msg.go_away.time_left,
-                                )
-                                go_away_received = True
-                                continue
-                            update = msg.session_resumption_update
-                            if update and update.resumable and update.new_handle:
-                                _resume_handle_put(session_id, update.new_handle)
-                            envelope = _envelope_from(msg)
-                            if envelope is None:
-                                continue
-                            ot = envelope.get("outputTranscription")
-                            if ot and ot.get("text") and display_map:
-                                original = ot["text"]
-                                replaced = _apply_display_map(original, display_map)
-                                if replaced != original:
-                                    logger.debug(
-                                        "Display map: %r -> %r", original, replaced
+                    go_away_event = asyncio.Event()
+                    go_away_secs: float = 30
+
+                    async def _drain_session() -> None:
+                        """Read from the Live session until it ends or GoAway deadline."""
+                        while True:
+                            saw_message = False
+                            async for msg in session.receive():
+                                saw_message = True
+                                if msg.go_away is not None:
+                                    tl = msg.go_away.time_left or "30s"
+                                    nonlocal go_away_secs
+                                    go_away_secs = (
+                                        int(tl.rstrip("s"))
+                                        if tl.endswith("s")
+                                        else 30
                                     )
-                                ot["text"] = replaced
-                            await websocket.send_text(json.dumps(envelope))
-                        if not saw_message or go_away_received:
-                            logger.debug(
-                                "Live session ended (go_away=%s); reopening",
-                                go_away_received,
+                                    logger.info(
+                                        "GoAway received (time_left=%s); "
+                                        "draining for up to %ds",
+                                        msg.go_away.time_left,
+                                        go_away_secs,
+                                    )
+                                    go_away_event.set()
+                                    continue
+                                update = msg.session_resumption_update
+                                if (
+                                    update
+                                    and update.resumable
+                                    and update.new_handle
+                                ):
+                                    _resume_handle_put(
+                                        session_id, update.new_handle
+                                    )
+                                envelope = _envelope_from(msg)
+                                if envelope is None:
+                                    continue
+                                ot = envelope.get("outputTranscription")
+                                if ot and ot.get("text") and display_map:
+                                    original = ot["text"]
+                                    replaced = _apply_display_map(
+                                        original, display_map
+                                    )
+                                    if replaced != original:
+                                        logger.debug(
+                                            "Display map: %r -> %r",
+                                            original,
+                                            replaced,
+                                        )
+                                    ot["text"] = replaced
+                                await websocket.send_text(
+                                    json.dumps(envelope)
+                                )
+                                if go_away_event.is_set():
+                                    sc = msg.server_content
+                                    if sc and sc.turn_complete:
+                                        logger.debug(
+                                            "Turn complete after GoAway; "
+                                            "reopening"
+                                        )
+                                        return
+                            if not saw_message:
+                                return
+
+                    drain_task = asyncio.create_task(_drain_session())
+                    go_away_wait = asyncio.create_task(go_away_event.wait())
+                    done, _ = await asyncio.wait(
+                        {drain_task, go_away_wait},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if go_away_wait in done and drain_task not in done:
+                        try:
+                            await asyncio.wait_for(
+                                drain_task, timeout=go_away_secs
                             )
-                            break
+                        except asyncio.TimeoutError:
+                            logger.debug(
+                                "GoAway deadline reached; reopening"
+                            )
+                            drain_task.cancel()
+                            try:
+                                await drain_task
+                            except asyncio.CancelledError:
+                                pass
+                    else:
+                        go_away_wait.cancel()
+                        exc = drain_task.exception() if drain_task.done() else None
+                        if exc:
+                            raise exc
+                    logger.debug(
+                        "Live session ended; reopening with stored handle"
+                    )
                 finally:
                     current_session = None
 
