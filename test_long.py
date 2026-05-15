@@ -568,6 +568,36 @@ async def run_iteration(
     )
 
 
+def _print_distribution(
+    label: str,
+    values: list[float],
+    buckets: list[tuple[str, float, float]],
+    bar_width: int = 30,
+) -> None:
+    """Print a histogram distribution for a list of values.
+
+    `buckets` is a list of (label, low_inclusive, high_exclusive).
+    """
+    if not values:
+        return
+    vals = sorted(values)
+    n = len(vals)
+    avg = sum(vals) / n
+    p50 = vals[n // 2]
+    p90 = vals[int(n * 0.9)]
+    p99 = vals[int(n * 0.99)]
+    print(f"\n  {label} (n={n})")
+    print(f"  min={vals[0]:.2f}  avg={avg:.2f}  p50={p50:.2f}  p90={p90:.2f}  p99={p99:.2f}  max={vals[-1]:.2f}")
+    counts = []
+    for bl, lo, hi in buckets:
+        c = sum(1 for v in vals if lo <= v < hi)
+        counts.append((bl, c))
+    max_c = max(c for _, c in counts) if counts else 1
+    for bl, c in counts:
+        bar = "#" * int(c / max_c * bar_width) if max_c > 0 else ""
+        print(f"  {bl:>10s}: {c:4d} ({100 * c / n:5.1f}%) {bar}")
+
+
 def _format_tags(result: IterationResult) -> tuple[str, str, str, str]:
     display = result.output_transcription or result.stt_transcription or ""
     if len(display) > 40:
@@ -744,35 +774,69 @@ async def main():
         f"({100 * stats.passed / stats.iterations:.1f}%) | "
         f"Avg score: {avg_score:.1f}/10 | Errors: {stats.errors}"
     )
-    tc_latencies = [r.turn_complete_sec for r in stats.results if r.turn_complete_sec is not None]
-    fr_latencies = [r.first_response_sec for r in stats.results if r.first_response_sec is not None]
-    if latency_measured:
-        avg_tc = sum(tc_latencies) / len(tc_latencies) if tc_latencies else 0
-        avg_fr = sum(fr_latencies) / len(fr_latencies) if fr_latencies else 0
-        print(
-            f"Latency (speech-end → done): avg {avg_tc:.1f}s | "
-            f"first-response avg {avg_fr:.1f}s | "
-            f"<{LATENCY_THRESHOLD}s: {stats.latency_ok}/{latency_measured} "
-            f"({100 * stats.latency_ok / latency_measured:.1f}%) | "
-            f"Slow: {stats.latency_slow}"
-        )
     if stats.glossary_checked:
         print(
             f"Glossary: {stats.glossary_found}/{stats.glossary_checked} "
             f"({100 * stats.glossary_found / stats.glossary_checked:.1f}%) terms matched in output"
         )
-    if stats.input_transcription_scores:
-        avg_in = sum(stats.input_transcription_scores) / len(stats.input_transcription_scores)
-        print(
-            f"Input transcription quality: {avg_in:.1f}/10 avg "
-            f"(n={len(stats.input_transcription_scores)})"
-        )
-    if stats.output_transcription_scores:
-        avg_out = sum(stats.output_transcription_scores) / len(stats.output_transcription_scores)
-        print(
-            f"Output transcription quality: {avg_out:.1f}/10 avg "
-            f"(n={len(stats.output_transcription_scores)})"
-        )
+
+    # Distribution reports
+    fr_latencies = [r.first_response_sec for r in stats.results if r.first_response_sec is not None]
+    _print_distribution("First Response (speech-end to first audio/transcript)", fr_latencies, [
+        ("=0s", 0.0, 0.001),
+        ("0-0.1s", 0.001, 0.1),
+        ("0.1-0.5s", 0.1, 0.5),
+        ("0.5-1s", 0.5, 1.0),
+        ("1-2s", 1.0, 2.0),
+        ("2-5s", 2.0, 5.0),
+        (">5s", 5.0, 1e9),
+    ])
+
+    tc_latencies = [r.turn_complete_sec for r in stats.results if r.turn_complete_sec is not None]
+    _print_distribution("Turn Complete (speech-end to full translation)", tc_latencies, [
+        ("<2s", 0.0, 2.0),
+        ("2-3s", 2.0, 3.0),
+        ("3-4s", 3.0, 4.0),
+        ("4-5s", 4.0, 5.0),
+        ("5-7s", 5.0, 7.0),
+        ("7-10s", 7.0, 10.0),
+        (">10s", 10.0, 1e9),
+    ])
+
+    scores = [r.score for r in stats.results if not r.error]
+    _print_distribution("Translation Score", scores, [
+        ("0-2", 0.0, 2.5),
+        ("3-4", 2.5, 4.5),
+        ("5-6", 4.5, 6.5),
+        ("7-8", 6.5, 8.5),
+        ("9-10", 8.5, 10.1),
+    ])
+
+    _print_distribution("Input Transcription Score", stats.input_transcription_scores, [
+        ("0-2", 0.0, 2.5),
+        ("3-4", 2.5, 4.5),
+        ("5-6", 4.5, 6.5),
+        ("7-8", 6.5, 8.5),
+        ("9-10", 8.5, 10.1),
+    ])
+
+    _print_distribution("Output Transcription Score", stats.output_transcription_scores, [
+        ("0-2", 0.0, 2.5),
+        ("3-4", 2.5, 4.5),
+        ("5-6", 4.5, 6.5),
+        ("7-8", 6.5, 8.5),
+        ("9-10", 8.5, 10.1),
+    ])
+
+    elapsed_vals = [r.elapsed for r in stats.results if not r.error]
+    _print_distribution("Total Iteration Time", elapsed_vals, [
+        ("<10s", 0.0, 10.0),
+        ("10-15s", 10.0, 15.0),
+        ("15-20s", 15.0, 20.0),
+        ("20-25s", 20.0, 25.0),
+        ("25-30s", 25.0, 30.0),
+        (">30s", 30.0, 1e9),
+    ])
 
     log_file.close()
     print(f"[{stamp()}] Metrics log: {log_path}")
