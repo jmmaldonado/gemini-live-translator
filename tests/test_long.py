@@ -736,25 +736,26 @@ async def main():
 
             if result.error:
                 stats.errors += 1
-                print(
+                line = (
                     f"[{stamp()}] #{result.index} ERROR ({result.elapsed:.1f}s){latency_tag}{glossary_tag}{tx_tag} | "
                     f'"{result.original[:50]}" | {result.error}'
                 )
             elif result.passed:
                 stats.passed += 1
                 stats.total_score += result.score
-                print(
+                line = (
                     f"[{stamp()}] #{result.index} PASS ({result.score:.0f}/10) "
                     f'({result.elapsed:.1f}s){latency_tag}{glossary_tag}{tx_tag} | "{result.original[:50]}" -> "{display}"'
                 )
             else:
                 stats.failed += 1
                 stats.total_score += result.score
-                print(
+                line = (
                     f"[{stamp()}] #{result.index} FAIL ({result.score:.0f}/10) "
                     f'({result.elapsed:.1f}s){latency_tag}{glossary_tag}{tx_tag} | "{result.original[:50]}" -> "{display}"'
                     f" | {result.reason}"
                 )
+            print(line)
 
             elapsed = time.monotonic() - start
             remaining = args.duration - elapsed
@@ -783,6 +784,14 @@ async def main():
             f"Glossary: {stats.glossary_found}/{stats.glossary_checked} "
             f"({100 * stats.glossary_found / stats.glossary_checked:.1f}%) terms matched in output"
         )
+        glossary_scores = [r.score for r in stats.results if r.glossary_found is not None and not r.error]
+        report.extend(_format_distribution("Glossary Iteration Score", glossary_scores, [
+            ("0-2", 0.0, 2.5),
+            ("3-4", 2.5, 4.5),
+            ("5-6", 4.5, 6.5),
+            ("7-8", 6.5, 8.5),
+            ("9-10", 8.5, 10.1),
+        ]))
 
     fr_latencies = [r.first_response_sec for r in stats.results if r.first_response_sec is not None]
     report.extend(_format_distribution("First Response (speech-end to first audio/transcript)", fr_latencies, [

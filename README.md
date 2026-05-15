@@ -156,26 +156,42 @@ Options:
 
 The test exercises session resumption and GoAway handling by running on a single persistent WebSocket for the entire duration.
 
-#### Metrics logged per iteration
+#### Output files
 
-Each iteration writes a JSON line to the log file with:
+Each run produces two files with matching timestamps:
+
+- `soak_YYYYMMDD_HHMMSS.jsonl` — Per-iteration metrics (one JSON line per iteration)
+- `soak_YYYYMMDD_HHMMSS.report` — Summary report with histogram distributions
+
+#### Metrics per iteration (JSONL)
 
 | Field | Description |
 |---|---|
 | `first_response_sec` | Time from end of speech to first model response (typically near 0 — the model processes audio in real-time) |
 | `turn_complete_sec` | Time from end of speech to `turnComplete` (user-perceived latency for the full translation) |
 | `elapsed_sec` | Total iteration time including TTS, STT, and verification |
-| `score` | Semantic translation quality (0-10, via Gemini Flash Lite) |
+| `score` | Semantic translation quality (0-10, via Gemini Flash Lite), verified against the model's output transcription |
 | `input_transcription_score` | Input transcription accuracy (0-10) |
 | `output_transcription_score` | Output transcription accuracy (0-10) |
-| `glossary_found` | Whether the glossary display term appeared in output (every 3rd iteration) |
+| `glossary_term` / `glossary_found` | Glossary term tested and whether the display transcription appeared in output (every 3rd iteration) |
 
-Load the JSONL with pandas for visualization:
+Load with pandas for visualization:
 
 ```python
 import pandas as pd
-df = pd.read_json("soak_20260515_220413.jsonl", lines=True)
+df = pd.read_json("soak_YYYYMMDD_HHMMSS.jsonl", lines=True)
 ```
+
+#### Summary report
+
+The `.report` file contains histogram distributions for:
+
+- **First Response** — speech-end to first audio/transcript (model real-time responsiveness)
+- **Turn Complete** — speech-end to full translation delivered (user-perceived latency)
+- **Translation Score** — semantic quality of translations
+- **Glossary Iteration Score** — translation quality on glossary-specific iterations
+- **Input / Output Transcription Score** — transcription accuracy
+- **Total Iteration Time** — end-to-end time including client-side TTS/STT
 
 ## SDK Compatibility Note
 
