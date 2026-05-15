@@ -7,6 +7,7 @@ import logging
 import os
 import sys
 import time
+import unicodedata
 import warnings
 from pathlib import Path
 
@@ -59,6 +60,31 @@ def _resume_handle_get(session_id: str) -> str | None:
 
 def _resume_handle_put(session_id: str, handle: str) -> None:
     _resume_handles[session_id] = (handle, time.monotonic())
+
+
+def _build_display_map(
+    entries: list[tuple[str, str, str]],
+) -> list[tuple[str, str]]:
+    """Build (nfkc_target, transcription) pairs for server-side transcript replacement."""
+    pairs = [
+        (unicodedata.normalize("NFKC", tgt), disp)
+        for src, tgt, disp in entries
+        if tgt != disp
+    ]
+    pairs.sort(key=lambda x: len(x[0]), reverse=True)
+    return pairs
+
+
+def _apply_display_map(text: str, display_map: list[tuple[str, str]]) -> str:
+    """Replace glossary target strings in *text* with their display transcription."""
+    if not text or not display_map:
+        return text
+    out = unicodedata.normalize("NFKC", text)
+    for nfkc_target, transcription in display_map:
+        if nfkc_target in out:
+            out = out.replace(nfkc_target, transcription)
+    return out
+
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -211,6 +237,9 @@ async def websocket_endpoint(
         return
 
     system_instruction = build_system_instruction(source, target, glossary_entries)
+    display_map = _build_display_map(
+        glossary_entries if glossary_entries is not None else load_default_glossary()
+    )
 
     # Shared state between the upstream forwarder and the session loop. The
     # forwarder has the lifetime of the browser WebSocket and writes to whichever
@@ -279,6 +308,15 @@ async def websocket_endpoint(
                             envelope = _envelope_from(msg)
                             if envelope is None:
                                 continue
+                            ot = envelope.get("outputTranscription")
+                            if ot and ot.get("text") and display_map:
+                                original = ot["text"]
+                                replaced = _apply_display_map(original, display_map)
+                                if replaced != original:
+                                    logger.debug(
+                                        "Display map: %r -> %r", original, replaced
+                                    )
+                                ot["text"] = replaced
                             await websocket.send_text(json.dumps(envelope))
                         if not saw_message:
                             logger.debug(

@@ -680,9 +680,10 @@ function buildDisplayMap(pairs) {
 
 function applyDisplayMap(text) {
   if (!text || !glossaryDisplayMap.length) return text;
-  let out = text;
+  let out = text.normalize('NFKC');
   for (const [from, to] of glossaryDisplayMap) {
-    if (out.includes(from)) out = out.split(from).join(to);
+    const nFrom = from.normalize('NFKC');
+    if (out.includes(nFrom)) out = out.split(nFrom).join(to);
   }
   return out;
 }
