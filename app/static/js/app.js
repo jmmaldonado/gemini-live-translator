@@ -593,11 +593,13 @@ import { startAudioPlayerWorklet } from "./audio-player.js";
 import { startAudioRecorderWorklet } from "./audio-recorder.js";
 
 function startAudio() {
-  startAudioPlayerWorklet().then(([node, ctx]) => {
+  const inputId = getSavedInputDevice();
+  const outputId = getSavedOutputDevice();
+  startAudioPlayerWorklet(outputId).then(([node, ctx]) => {
     audioPlayerNode = node;
     audioPlayerContext = ctx;
   });
-  startAudioRecorderWorklet(audioRecorderHandler).then(([node, ctx, stream]) => {
+  startAudioRecorderWorklet(audioRecorderHandler, inputId).then(([node, ctx, stream]) => {
     audioRecorderNode = node;
     audioRecorderContext = ctx;
     micStream = stream;
@@ -960,4 +962,98 @@ document.getElementById("resetGlossary").addEventListener("click", async () => {
   } catch (err) {
     setGlossaryStatus("Reset failed: " + err.message, "error");
   }
+});
+
+/**
+ * Audio device selection (per browser, stored in localStorage)
+ */
+const AUDIO_INPUT_KEY = "live-translator.audio.inputDeviceId";
+const AUDIO_OUTPUT_KEY = "live-translator.audio.outputDeviceId";
+
+function getSavedInputDevice() {
+  return localStorage.getItem(AUDIO_INPUT_KEY) || "";
+}
+function setSavedInputDevice(id) {
+  if (id) localStorage.setItem(AUDIO_INPUT_KEY, id);
+  else localStorage.removeItem(AUDIO_INPUT_KEY);
+}
+function getSavedOutputDevice() {
+  return localStorage.getItem(AUDIO_OUTPUT_KEY) || "";
+}
+function setSavedOutputDevice(id) {
+  if (id) localStorage.setItem(AUDIO_OUTPUT_KEY, id);
+  else localStorage.removeItem(AUDIO_OUTPUT_KEY);
+}
+
+const audioOverlay = document.getElementById("audioOverlay");
+const audioInputSelect = document.getElementById("audioInputSelect");
+const audioOutputSelect = document.getElementById("audioOutputSelect");
+const audioHint = document.getElementById("audioHint");
+
+async function populateAudioDevices() {
+  let devices;
+  try {
+    devices = await navigator.mediaDevices.enumerateDevices();
+  } catch {
+    audioHint.textContent = "Could not enumerate audio devices.";
+    return;
+  }
+
+  const inputs = devices.filter(d => d.kind === "audioinput");
+  const outputs = devices.filter(d => d.kind === "audiooutput");
+  const hasLabels = inputs.some(d => d.label);
+
+  audioHint.textContent = hasLabels
+    ? "Changes take effect on the next session."
+    : "Grant microphone permission to see device names.";
+
+  const savedInput = getSavedInputDevice();
+  const savedOutput = getSavedOutputDevice();
+
+  audioInputSelect.innerHTML = "";
+  const defaultIn = document.createElement("option");
+  defaultIn.value = "";
+  defaultIn.textContent = "System Default";
+  audioInputSelect.appendChild(defaultIn);
+  for (const d of inputs) {
+    const opt = document.createElement("option");
+    opt.value = d.deviceId;
+    opt.textContent = d.label || `Microphone (${d.deviceId.slice(0, 8)}...)`;
+    if (d.deviceId === savedInput) opt.selected = true;
+    audioInputSelect.appendChild(opt);
+  }
+
+  audioOutputSelect.innerHTML = "";
+  const defaultOut = document.createElement("option");
+  defaultOut.value = "";
+  defaultOut.textContent = "System Default";
+  audioOutputSelect.appendChild(defaultOut);
+  for (const d of outputs) {
+    const opt = document.createElement("option");
+    opt.value = d.deviceId;
+    opt.textContent = d.label || `Speaker (${d.deviceId.slice(0, 8)}...)`;
+    if (d.deviceId === savedOutput) opt.selected = true;
+    audioOutputSelect.appendChild(opt);
+  }
+}
+
+audioInputSelect.addEventListener("change", () => {
+  setSavedInputDevice(audioInputSelect.value);
+});
+
+audioOutputSelect.addEventListener("change", () => {
+  setSavedOutputDevice(audioOutputSelect.value);
+});
+
+document.getElementById("openAudio").addEventListener("click", async () => {
+  audioOverlay.classList.remove("hidden");
+  await populateAudioDevices();
+});
+
+document.getElementById("closeAudio").addEventListener("click", () => {
+  audioOverlay.classList.add("hidden");
+});
+
+audioOverlay.addEventListener("click", (e) => {
+  if (e.target === audioOverlay) audioOverlay.classList.add("hidden");
 });

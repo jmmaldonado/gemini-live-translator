@@ -2,14 +2,14 @@
  * Audio Recorder Worklet
  */
 
-export async function startAudioRecorderWorklet(audioRecorderHandler) {
+export async function startAudioRecorderWorklet(audioRecorderHandler, deviceId) {
   const audioRecorderContext = new AudioContext({ sampleRate: 16000 });
   const workletURL = new URL("./pcm-recorder-processor.js", import.meta.url);
   await audioRecorderContext.audioWorklet.addModule(workletURL);
 
-  const micStream = await navigator.mediaDevices.getUserMedia({
-    audio: { channelCount: 1 },
-  });
+  const constraints = { audio: { channelCount: 1 } };
+  if (deviceId) constraints.audio.deviceId = { exact: deviceId };
+  const micStream = await navigator.mediaDevices.getUserMedia(constraints);
   const source = audioRecorderContext.createMediaStreamSource(micStream);
 
   const audioRecorderNode = new AudioWorkletNode(

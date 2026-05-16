@@ -15,6 +15,7 @@
         <span class="subtitle">Real-time audio translation in 97 languages, powered by Gemini Live API</span>
       </div>
       <div class="header-controls">
+        <button id="openAudio" class="toggle-console-btn">Audio</button>
         <button id="openGlossary" class="toggle-console-btn">Glossary</button>
         <button id="toggleConsole" class="toggle-console-btn">Console</button>
         <div class="connection-status">
@@ -55,6 +56,26 @@
             <input type="file" id="glossaryFile" accept=".csv,text/csv" />
             <button id="uploadGlossary" type="button">Load &amp; replace</button>
             <button id="resetGlossary" type="button" class="glossary-reset">Reset to defaults</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay hidden" id="audioOverlay">
+      <div class="modal" role="dialog" aria-labelledby="audioTitle">
+        <div class="modal-header">
+          <h2 id="audioTitle">Audio Settings</h2>
+          <button class="modal-close" id="closeAudio" aria-label="Close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p class="modal-hint" id="audioHint"></p>
+          <div class="audio-setting">
+            <label for="audioInputSelect">Microphone</label>
+            <select id="audioInputSelect"></select>
+          </div>
+          <div class="audio-setting">
+            <label for="audioOutputSelect">Speaker</label>
+            <select id="audioOutputSelect"></select>
           </div>
         </div>
       </div>

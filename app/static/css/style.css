@@ -867,3 +867,28 @@ button {
   color: var(--agent-text-color);
   border: 1px solid var(--border-color);
 }
+
+/* Audio settings modal */
+.audio-setting {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 1rem;
+}
+
+.audio-setting label {
+  font-weight: 500;
+  font-size: 0.875rem;
+  color: var(--agent-text-color);
+}
+
+.audio-setting select {
+  padding: 0.5rem;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 0.875rem;
+  background: var(--bg-color);
+  color: var(--agent-text-color);
+  width: 100%;
+  cursor: pointer;
+}
