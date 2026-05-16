@@ -1,126 +1,148 @@
 # Live Translator
 
-Real-time audio translation app powered by Gemini Live API. Speak in any language and get immediate audio translation in your chosen target language.
-
-Supports 97 languages including English, Japanese, Chinese, Spanish, French, German, Portuguese, Korean, Hindi, Arabic, and many more.
+Real-time audio translation powered by Gemini Live API. Speak in any language and hear the translation immediately. Supports 97 languages.
 
 ![Demo](demo.gif)
 
-## Prerequisites
+## Getting Started
+
+### Prerequisites
 
 - Python 3.10+
 - [uv](https://docs.astral.sh/uv/) package manager
 - [Gemini API key](https://aistudio.google.com/apikey)
 
-## Setup
+### Setup
 
 ```bash
 uv sync
 ```
 
-Set your Gemini API key in `app/.env`:
+Create `app/.env` with your API key:
 
 ```
 GOOGLE_API_KEY=your-api-key
 ```
 
-
-## Custom Glossary
-
-Pin specific terms to a fixed translation so the model always renders them the same way. **The glossary is per browser** — it's stored in your browser's `localStorage` and sent to the server only when you start a session. Different visitors can run different glossaries at the same time without affecting each other; nothing is persisted server-side.
-
-1. Click **Glossary** in the header. On first visit the modal seeds itself from the default glossary baked into the app (`app/dict.csv`). Entries are shown in a three-column table: **Source / Pronunciation / Transcript**.
-2. Click **Choose .csv file** and pick a UTF-8 CSV (max 256 KB, max 1000 entries). Each line is `source,target[,transcription]`:
-
-   ```csv
-   Kubernetes,クバネティス,Kubernetes
-   Cloud Run,クラウドラン,Cloud Run
-   Gemini,ジェミニ,Gemini
-   Vertex AI,バーテックスエーアイ,Vertex AI
-   ```
-
-   The optional **third column** is a display override. The model still pronounces the term using `target` (so the audio sounds right), but the on-screen transcript renders `transcription` in place of `target`. Useful for proper nouns where you want a phonetic pronunciation but a Latin display label. When omitted, the transcript shows `target` as-is. The replacement happens client-side, so it never affects what the model emits — only what you see.
-
-3. Click **Load & replace**. The CSV is parsed in the browser and stored locally. Use **Reset to defaults** to discard your customisations and re-fetch the seed glossary from the server.
-4. The new entries take effect on the **next** session — click **Start Audio** again, or change languages, to open a fresh WebSocket. Live sessions keep the glossary they started with.
-
-Status feedback appears below the entry count: green for success, red for parse errors (a line missing the comma, file too large, etc.) — in the error case the previous glossary stays in place.
-
-### Changing the default glossary
-
-Edit `app/dict.csv` and redeploy. The endpoint `GET /api/glossary/defaults` returns those defaults. Browsers that already have a cached glossary in `localStorage` will keep using it — they need to either click **Reset to defaults** in the modal, or the app needs to bump the storage key (`GLOSSARY_KEY` in `app/static/js/app.js`) to force a one-time re-seed on next load.
-
-## Run
+### Run
 
 ```bash
 uv run uvicorn app.main:app --reload
 ```
 
-Open http://localhost:8000 and click **Start Audio** to begin translating.
+Open http://localhost:8000.
 
-## Architecture
+## User Guide
 
-FastAPI bridges one browser WebSocket to a series of Gemini Live API sessions via `google-genai`'s `client.aio.live.connect(...)`. The browser WS lives for the lifetime of the user's tab; upstream Live sessions are opened, expire, and reopened underneath it without the browser noticing.
+### Basic Usage
 
-1. **Browser session start** — The browser opens a WebSocket to `/ws/{user_id}/{session_id}` and sends a JSON setup frame (`{glossary: [...]}`). The server parses it and builds a per-connection system instruction that embeds the glossary.
-2. **Upstream session loop** — A background coroutine repeatedly opens `client.aio.live.connect(model, config)` with `LiveConnectConfig(response_modalities=[AUDIO], input/output_audio_transcription=…, session_resumption=…)`. Each open passes any stored resumption handle for `session_id` so the model picks up where it left off; on each `session_resumption_update.new_handle` from the server, the latest handle is stored in-memory (keyed by `session_id`, lazily evicted after the Live API's ~10 min window). When the upstream session expires — Live API sessions cap out around 15 min and apply shorter idle timeouts — the loop simply opens another one with the freshest handle. The browser WebSocket stays open across every reopen.
-3. **Audio bridge** — A separate coroutine pulls binary audio frames from the browser WS and forwards them to whichever upstream session is current via `send_realtime_input(audio=...)`. Frames that arrive during the sub-second window between upstream sessions are dropped; resumption preserves model context across the gap, so the speaker doesn't notice.
-4. **Wire format** — Each `LiveServerMessage` from upstream is translated into a small camelCase JSON envelope the frontend understands (`turnComplete`, `inputTranscription`, `outputTranscription`, `content.parts[]`, `usageMetadata`). The frontend swaps `target` → `transcription` on incoming output-transcription text before rendering.
-5. **Termination** — The handler only exits when the browser disconnects (or on a fatal error). Upstream sessions are torn down implicitly each time the inner `async with` exits and re-enters.
+1. Select source and target languages from the bottom bar
+2. Click **Start** to begin continuous translation (always-on mode)
+3. Speak into your microphone — translations appear as text bubbles and play as audio
 
-## Model
+### Push to Talk
 
-Uses `gemini-3.1-flash-live-preview` with the Gemini API (`generativelanguage.googleapis.com`). This is a native audio model supporting real-time audio input/output with transcription. The app sends audio via `send_realtime_input` (16 kHz mono PCM) and receives audio at 24 kHz.
+Toggle **Push to Talk** on the right to switch from always-on to manual control. Hold the **Hold to Talk** button (or press spacebar) to transmit, release to stop. A 1.5s audio tail is sent after release so the model's VAD can detect end-of-speech.
 
-The system instruction is built in `app/translator_agent/agent.py` as:
+### Audio Settings
 
-```
-You are a real-time translator from {source} to {target}. Listen to the
-incoming audio and immediately output the translated version in {target},
-maintaining the speaker's original tone and urgency. Translate only the
-current utterance. Do not repeat, reference, or prepend translations from
-previous turns. Each spoken segment should produce exactly one translation
-of that segment and nothing else.
+Click **Audio** in the header to select which microphone and speaker to use. Choices are saved in your browser and applied on the next session.
 
-Use the following glossary for specific terms. Match the source term
-case-insensitively. When you hear any of these terms, always use the
-paired translation:
-- <source> → <target>
-...
+### Glossary
+
+Click **Glossary** in the header to pin specific terms to fixed translations. The glossary is per-browser (stored in `localStorage`) and sent to the server on each new session.
+
+Upload a UTF-8 CSV with `source,target[,transcription]` per line:
+
+```csv
+Kubernetes,クバネティス,Kubernetes
+Cloud Run,クラウドラン,Cloud Run
+Vertex AI,バーテックスエーアイ,Vertex AI
 ```
 
-Only the first two CSV columns reach the model; the third (transcript display) is purely a frontend post-processing rule.
+The optional third column is a display override — the model pronounces the `target` form, but the on-screen transcript shows the `transcription` form. Useful for proper nouns where you want phonetic audio but a Latin display label.
 
-### Known limitation: context leaking with session resumption
+Changes take effect on the next session (click **Start** again, or change languages).
 
-Session resumption carries model context across upstream session cycles (~15 min each), which is essential for seamless long conversations. However, in ~1-2% of turns the model prepends the previous turn's translation before the current one. Soak testing confirmed this is a model-level behavior tied to session resumption — with resumption disabled, translations score 100% but the session breaks every time the upstream Live session expires. The system instruction mitigates this ("translate only the current utterance") but does not fully eliminate it.
+#### Changing the default glossary
 
-## Deployment to Cloud Run
+Edit `app/dict.csv` and redeploy. Browsers with a cached glossary keep using it until the user clicks **Reset to defaults** in the modal.
 
-### 1. Prerequisites
+### Connection States
 
-- [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) (`gcloud`) installed and configured
-- A Google Cloud project with Cloud Run API enabled
+The status indicator in the top-right corner shows:
+- **Yellow dot / Connecting...** — WebSocket connected, model warming up
+- **Green dot / Connected** — ready to translate
+- **Red dot / Disconnected** — connection lost, auto-reconnects in 5s
 
-### 2. Configure Environment
+The Start button and PTT toggle are disabled until the warmup completes.
 
-Set your Gemini API key in `app/.env`:
+---
+
+## Technical Details
+
+### Architecture
 
 ```
-GOOGLE_API_KEY=your-api-key
+Browser                          Server (FastAPI)                 Gemini Live API
+  |                                  |                                |
+  |-- WebSocket /ws/{user}/{sid} --> |                                |
+  |   (binary PCM frames)           |-- client.aio.live.connect() -->|
+  |                                  |   (session_resumption=handle)  |
+  |                                  |                                |
+  |                                  |<-- LiveServerMessage ---------|
+  |<-- JSON envelope --------------- |                                |
+  |   (transcription, audio, etc.)   |                                |
 ```
 
-Export it before deploying:
+FastAPI bridges one browser WebSocket to a series of Gemini Live API sessions. The browser WS lives for the lifetime of the user's tab; upstream Live sessions are opened, expire (~15 min), and reopened underneath it transparently.
+
+**Connection lifecycle:**
+
+1. Browser opens WebSocket to `/ws/{user_id}/{session_id}` and sends a JSON setup frame with the per-browser glossary
+2. Server builds a system instruction embedding the glossary and language pair
+3. A background coroutine opens `client.aio.live.connect()` with session resumption, runs warmup, then bridges audio
+4. When the upstream session expires (GoAway), the coroutine reopens with the latest resumption handle
+5. A separate coroutine forwards binary audio frames from the browser WS to whichever upstream session is current
+
+**Wire format:** Each `LiveServerMessage` is translated into a camelCase JSON envelope the frontend understands (`turnComplete`, `inputTranscription`, `outputTranscription`, `content.parts[]`, `usageMetadata`).
+
+### Model
+
+Uses `gemini-3.1-flash-live-preview` via the Gemini API (`generativelanguage.googleapis.com`). Audio input is 16 kHz mono PCM; output is 24 kHz PCM.
+
+The system instruction (built in `app/translator_agent/agent.py`) tells the model to translate only the current utterance and never repeat previous translations. The glossary is embedded as `source → target` pairs with case-insensitive matching.
+
+### Speech Warmup
+
+Every new Gemini Live session (including resumed ones) goes through a warmup phase before user audio flows through. The server sends a pre-recorded 0.6s "Hello" TTS clip (`app/warmup.pcm`, 16 kHz mono PCM) and waits for the model to respond with audio data. This serves two purposes:
+
+1. **Primes the model** so it responds immediately to real user speech instead of taking several seconds on the first turn
+2. **Flushes context leaking** on resumed sessions (see below)
+
+The warmup retries up to 5 times (3s timeout each). The server sends a `{"ready": true}` signal to the browser as soon as the first audio response is detected, rather than waiting for the full turn to complete — this cuts perceived warmup time roughly in half (~1s vs ~2s).
+
+The warmup audio is discarded server-side; it never reaches the browser.
+
+### Session Resumption and Context Leaking
+
+**Session resumption** carries model context across upstream session cycles, which is essential for seamless long conversations. Without it, the model loses all context every ~15 minutes when the Live API session expires.
+
+**The problem:** After resuming, the model sometimes prepends the previous turn's translation before the current one. Testing with `tests/repro_leak.py` confirmed this is a model-level behavior — it reproduced 100% of the time without mitigation.
+
+**The fix:** Sending actual speech (not silence) during warmup forces a full model turn that reliably flushes the replayed context. Testing showed 0 leaks across 10 consecutive resumed sessions with speech warmup, compared to 100% leak rate without it.
+
+Silence warmup was tried first but proved ineffective — the model needs to produce a real audio response to flush its internal replay buffer.
+
+### SDK Note
+
+`app/main.py` clears `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_CLOUD_PROJECT`, and `GOOGLE_CLOUD_LOCATION` before constructing the genai client. These env vars cause the SDK to route through `aiplatform.googleapis.com`; clearing them forces Gemini API key routing via `generativelanguage.googleapis.com`.
+
+### Deployment to Cloud Run
 
 ```bash
-set -a
-source app/.env
-set +a
-```
+set -a && source app/.env && set +a
 
-### 3. Deploy
-
-```bash
 gcloud run deploy live-translation \
   --source . \
   --project YOUR_PROJECT \
@@ -133,16 +155,15 @@ gcloud run deploy live-translation \
 ```
 
 Key flags:
-- `--timeout 3600` — the browser WebSocket can hold a single conversation for up to an hour, even though the upstream Live sessions inside it cycle every ~15 min.
-- `--min-instances 1` — avoids cold start latency for WebSocket connections.
-- `--max-instances 1` — required as written, because session-resumption handles are kept in an in-memory dict on the server. Going multi-replica would route a browser reconnect to a different instance with no handle, defeating resumption. Use a shared store (e.g. Redis) before raising this.
-
+- `--timeout 3600` — allows hour-long WebSocket conversations (upstream Live sessions cycle internally every ~15 min)
+- `--min-instances 1` — avoids cold start latency
+- `--max-instances 1` — session resumption handles are stored in-memory; multi-replica requires a shared store (e.g. Redis)
 
 ## Testing
 
 ### Soak Test
 
-`tests/test_long.py` is a long-running automated test that validates translation quality, latency, glossary behavior, and session stability over extended periods (default 1 hour).
+`tests/test_long.py` validates translation quality, latency, glossary behavior, and session stability over extended periods (default 1 hour).
 
 It generates random English sentences via Gemini Flash Lite, converts them to audio with Google Cloud TTS, streams them through the translator WebSocket, transcribes the returned audio with Google Cloud STT, and verifies semantic correctness.
 
@@ -156,50 +177,7 @@ uv run python tests/test_long.py --duration 120
 uv run python tests/test_long.py --url wss://YOUR_CLOUD_RUN_URL --duration 3600
 ```
 
-Options:
-- `--url` — WebSocket base URL (default: `ws://localhost:8000`)
-- `--duration` — Test duration in seconds (default: 3600)
-- `--source` / `--target` — Language pair (default: en / ja)
-- `--log` — Path to JSONL metrics log (default: auto-generated `soak_YYYYMMDD_HHMMSS.jsonl`)
-
-The test exercises session resumption and GoAway handling by running on a single persistent WebSocket for the entire duration.
-
-#### Output files
-
-Each run produces two files with matching timestamps:
-
-- `soak_YYYYMMDD_HHMMSS.jsonl` — Per-iteration metrics (one JSON line per iteration)
-- `soak_YYYYMMDD_HHMMSS.report` — Summary report with histogram distributions
-
-#### Metrics per iteration (JSONL)
-
-| Field | Description |
-|---|---|
-| `first_response_sec` | Time from end of speech to first model response (typically near 0 — the model processes audio in real-time) |
-| `turn_complete_sec` | Time from end of speech to `turnComplete` (user-perceived latency for the full translation) |
-| `elapsed_sec` | Total iteration time including TTS, STT, and verification |
-| `score` | Semantic translation quality (0-10, via Gemini Flash Lite), verified against the model's output transcription |
-| `input_transcription_score` | Input transcription accuracy (0-10) |
-| `output_transcription_score` | Output transcription accuracy (0-10) |
-| `glossary_term` / `glossary_found` | Glossary term tested and whether the display transcription appeared in output (every 3rd iteration) |
-
-Load with pandas for visualization:
-
-```python
-import pandas as pd
-df = pd.read_json("soak_YYYYMMDD_HHMMSS.jsonl", lines=True)
-```
-
-#### Summary report
-
-The `.report` file contains histogram distributions for:
-
-- **First Response** — speech-end to first audio/transcript (model real-time responsiveness)
-- **Turn Complete** — speech-end to full translation delivered (user-perceived latency)
-- **Translation Score** — semantic quality of translations
-- **Glossary Iteration Score** — translation quality on glossary-specific iterations
-- **Input / Output Transcription Score** — transcription accuracy
-- **Total Iteration Time** — end-to-end time including client-side TTS/STT
+Options: `--url` (WebSocket base URL), `--duration` (seconds), `--source`/`--target` (language pair), `--log` (JSONL output path).
 
 #### Latest soak test results (1 hour, en → ja, Cloud Run)
 
@@ -223,6 +201,11 @@ Output Transcription Score
   avg=9.41  p50=10.00  9-10: 88.0%
 ```
 
-## SDK Compatibility Note
+### Context Leak Reproduction
 
-`app/main.py` pops `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_CLOUD_PROJECT`, and `GOOGLE_CLOUD_LOCATION` before constructing the genai client. The SDK auto-detects these and would otherwise route requests to `aiplatform.googleapis.com`; clearing them forces Gemini API key routing via `generativelanguage.googleapis.com`.
+`tests/repro_leak.py` is a standalone script that reproduces the session resumption context leaking bug. It synthesizes short sentences via TTS, sends them through the Live API with session resumption, and checks if output from previous turns appears in the current translation.
+
+```bash
+uv run python tests/repro_leak.py
+uv run python tests/repro_leak.py --max-rounds 50
+```
