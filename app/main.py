@@ -241,6 +241,30 @@ async def websocket_endpoint(
         glossary_entries if glossary_entries is not None else load_default_glossary()
     )
 
+    async def _warmup_resumed_session(session: types.AsyncSession) -> None:
+        """Send a short silence to flush any replayed output from session resumption.
+
+        After resuming, the model sometimes re-emits the previous turn's
+        translation.  By sending ~1s of silence and draining until turnComplete,
+        we absorb that replay before real audio flows through.
+        """
+        silence = b"\x00" * 32000  # 1s of silence at 16kHz mono 16-bit
+        await session.send_realtime_input(
+            audio=types.Blob(mime_type="audio/pcm;rate=16000", data=silence)
+        )
+        try:
+            async with asyncio.timeout(5):
+                async for msg in session.receive():
+                    update = msg.session_resumption_update
+                    if update and update.resumable and update.new_handle:
+                        _resume_handle_put(session_id, update.new_handle)
+                    sc = msg.server_content
+                    if sc and sc.turn_complete:
+                        logger.debug("Warm-up turn complete; session is clean")
+                        return
+        except TimeoutError:
+            logger.debug("Warm-up timed out; proceeding anyway")
+
     # Shared state between the upstream forwarder and the session loop. The
     # forwarder has the lifetime of the browser WebSocket and writes to whichever
     # Live session is currently open; the session loop tears down old sessions
@@ -297,6 +321,8 @@ async def websocket_endpoint(
             )
             try:
                 async with client.aio.live.connect(model=MODEL, config=config) as session:
+                    if prior_handle:
+                        await _warmup_resumed_session(session)
                     current_session = session
                     try:
                         go_away_event = asyncio.Event()
