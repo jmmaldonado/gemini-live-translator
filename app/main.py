@@ -241,7 +241,7 @@ async def websocket_endpoint(
         glossary_entries if glossary_entries is not None else load_default_glossary()
     )
 
-    async def _warmup_resumed_session(session: types.AsyncSession) -> None:
+    async def _warmup_resumed_session(session) -> None:
         """Send a short silence to flush any replayed output from session resumption.
 
         After resuming, the model sometimes re-emits the previous turn's
