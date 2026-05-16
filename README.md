@@ -201,6 +201,28 @@ The `.report` file contains histogram distributions for:
 - **Input / Output Transcription Score** — transcription accuracy
 - **Total Iteration Time** — end-to-end time including client-side TTS/STT
 
+#### Latest soak test results (1 hour, en → ja, Cloud Run)
+
+```
+Duration: 3631s | Iterations: 185 | Passed: 178/185 (96.2%) | Avg score: 9.7/10
+Glossary: 34/61 (55.7%) terms matched in output
+
+First Response (speech-end to first audio/transcript)
+  avg=0.05s  p50=0.00s  p90=0.09s  p99=2.25s
+
+Turn Complete (speech-end to full translation)
+  avg=6.28s  p50=6.17s  p90=7.72s  p99=12.45s
+
+Translation Score
+  avg=9.66  p50=10.00  9-10: 95.7%
+
+Input Transcription Score
+  avg=9.96  p50=10.00  9-10: 99.5%
+
+Output Transcription Score
+  avg=9.41  p50=10.00  9-10: 88.0%
+```
+
 ## SDK Compatibility Note
 
 `app/main.py` pops `GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_CLOUD_PROJECT`, and `GOOGLE_CLOUD_LOCATION` before constructing the genai client. The SDK auto-detects these and would otherwise route requests to `aiplatform.googleapis.com`; clearing them forces Gemini API key routing via `generativelanguage.googleapis.com`.
