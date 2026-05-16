@@ -608,13 +608,53 @@ function initAudioIfNeeded() {
   addConsoleEntry('outgoing', 'Audio Mode Enabled', { status: 'Microphone active' }, '🎤', 'system');
 }
 
+function getLanguageNames() {
+  const src = document.getElementById("sourceLangTrigger").textContent;
+  const tgt = document.getElementById("targetLangTrigger").textContent;
+  return { src, tgt };
+}
+
+let warmupInterval = null;
+
+function cancelWarmupCountdown() {
+  if (warmupInterval) {
+    clearInterval(warmupInterval);
+    warmupInterval = null;
+  }
+}
+
+function showWarmupCountdown(onComplete) {
+  cancelWarmupCountdown();
+  const total = 5;
+  const msgDiv = document.createElement("div");
+  msgDiv.className = "system-message";
+  msgDiv.textContent = `Starting in ${total} seconds...`;
+  messagesDiv.appendChild(msgDiv);
+  scrollToBottom();
+
+  let remaining = total - 1;
+  warmupInterval = setInterval(() => {
+    if (remaining > 0) {
+      msgDiv.textContent = `Starting in ${remaining} second${remaining > 1 ? "s" : ""}...`;
+      remaining--;
+    } else {
+      clearInterval(warmupInterval);
+      warmupInterval = null;
+      msgDiv.remove();
+      const { src, tgt } = getLanguageNames();
+      addSystemMessage(`Ready for ${src} to ${tgt} translation`);
+      onComplete();
+    }
+  }, 1000);
+}
+
 // Always-on mode: click Start
 startAudioButton.addEventListener("click", () => {
   if (pttMode) return;
   startAudioButton.disabled = true;
   initAudioIfNeeded();
   is_audio = true;
-  addSystemMessage("Audio mode enabled - speak to translate in real-time");
+  showWarmupCountdown(() => {});
 });
 
 // PTT toggle
@@ -622,28 +662,37 @@ pttToggle.addEventListener("change", () => {
   pttMode = pttToggle.checked;
   if (pttMode) {
     startAudioButton.classList.add("ptt-mode");
-    startAudioButton.disabled = false;
-    startAudioButton.textContent = "Hold to Talk";
-    if (audioInitialized) is_audio = false;
+    if (!audioInitialized) {
+      startAudioButton.disabled = true;
+      startAudioButton.textContent = "Hold to Talk";
+      initAudioIfNeeded();
+      is_audio = true;
+      showWarmupCountdown(() => {
+        is_audio = false;
+        startAudioButton.disabled = false;
+      });
+    } else {
+      startAudioButton.disabled = false;
+      startAudioButton.textContent = "Hold to Talk";
+      is_audio = false;
+    }
   } else {
+    cancelWarmupCountdown();
     startAudioButton.classList.remove("ptt-mode");
     startAudioButton.classList.remove("ptt-active");
-    if (audioInitialized) {
-      startAudioButton.disabled = true;
-      startAudioButton.textContent = "Start";
-      is_audio = true;
-    } else {
-      startAudioButton.textContent = "Start";
-    }
+    startAudioButton.textContent = "Start";
+    startAudioButton.disabled = false;
+    is_audio = false;
+    audioInitialized = false;
+    reconnectWithNewLanguage();
   }
 });
 
 // PTT hold handlers
 function pttDown(e) {
-  if (!pttMode || startAudioButton.disabled && !pttMode) return;
+  if (!pttMode || startAudioButton.disabled) return;
   e.preventDefault();
   if (pttTailTimeout) { clearTimeout(pttTailTimeout); pttTailTimeout = null; }
-  initAudioIfNeeded();
   is_audio = true;
   startAudioButton.classList.add("ptt-active");
   startAudioButton.textContent = "Talking...";
