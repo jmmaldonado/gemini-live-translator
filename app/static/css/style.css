@@ -457,6 +457,13 @@ button {
   -webkit-user-select: none;
   flex: 1;
   justify-content: flex-end;
+  pointer-events: none;
+}
+
+.ptt-toggle input,
+.ptt-slider,
+.ptt-label {
+  pointer-events: auto;
 }
 
 .ptt-toggle input {
