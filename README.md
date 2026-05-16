@@ -77,15 +77,23 @@ The system instruction is built in `app/translator_agent/agent.py` as:
 ```
 You are a real-time translator from {source} to {target}. Listen to the
 incoming audio and immediately output the translated version in {target},
-maintaining the speaker's original tone and urgency.
+maintaining the speaker's original tone and urgency. Translate only the
+current utterance. Do not repeat, reference, or prepend translations from
+previous turns. Each spoken segment should produce exactly one translation
+of that segment and nothing else.
 
-Use the following glossary for specific terms. When you hear these words,
-always use the paired translation:
+Use the following glossary for specific terms. Match the source term
+case-insensitively. When you hear any of these terms, always use the
+paired translation:
 - <source> → <target>
 ...
 ```
 
 Only the first two CSV columns reach the model; the third (transcript display) is purely a frontend post-processing rule.
+
+### Known limitation: context leaking with session resumption
+
+Session resumption carries model context across upstream session cycles (~15 min each), which is essential for seamless long conversations. However, in ~1-2% of turns the model prepends the previous turn's translation before the current one. Soak testing confirmed this is a model-level behavior tied to session resumption — with resumption disabled, translations score 100% but the session breaks every time the upstream Live session expires. The system instruction mitigates this ("translate only the current utterance") but does not fully eliminate it.
 
 ## Deployment to Cloud Run
 
