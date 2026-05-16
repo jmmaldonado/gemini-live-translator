@@ -10,20 +10,9 @@
 
   <body>
     <header>
-      <h1>Live Translator</h1>
-      <div class="subtitle">Real-time audio translation in 97 languages, powered by Gemini Live API</div>
-      <div class="language-selector">
-        <div class="custom-select" id="sourceLangWrapper">
-          <button class="custom-select-trigger" id="sourceLangTrigger">English</button>
-          <div class="custom-select-dropdown" id="sourceLangDropdown"></div>
-          <input type="hidden" id="sourceLang" value="en">
-        </div>
-        <button class="lang-swap-btn" id="swapLangs" title="Swap languages">⇄</button>
-        <div class="custom-select" id="targetLangWrapper">
-          <button class="custom-select-trigger" id="targetLangTrigger">Japanese (日本語)</button>
-          <div class="custom-select-dropdown" id="targetLangDropdown"></div>
-          <input type="hidden" id="targetLang" value="ja">
-        </div>
+      <div class="title-row">
+        <h1>Live Translator</h1>
+        <span class="subtitle">Real-time audio translation in 97 languages, powered by Gemini Live API</span>
       </div>
       <div class="header-controls">
         <button id="openGlossary" class="toggle-console-btn">Glossary</button>
@@ -77,7 +66,20 @@
 
         <div class="input-container">
           <div class="input-wrapper">
-            <button type="button" id="startAudioButton">Start Audio</button>
+            <div class="language-selector">
+              <div class="custom-select" id="sourceLangWrapper">
+                <button class="custom-select-trigger" id="sourceLangTrigger">English</button>
+                <div class="custom-select-dropdown" id="sourceLangDropdown"></div>
+                <input type="hidden" id="sourceLang" value="en">
+              </div>
+              <button class="lang-swap-btn" id="swapLangs" title="Swap languages">⇄</button>
+              <div class="custom-select" id="targetLangWrapper">
+                <button class="custom-select-trigger" id="targetLangTrigger">Japanese (日本語)</button>
+                <div class="custom-select-dropdown" id="targetLangDropdown"></div>
+                <input type="hidden" id="targetLang" value="ja">
+              </div>
+            </div>
+            <button type="button" id="startAudioButton">Start</button>
           </div>
         </div>
       </div>
