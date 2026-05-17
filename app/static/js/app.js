@@ -215,45 +215,36 @@ function addSystemMessage(text) {
   messageDiv.textContent = text;
   messagesDiv.appendChild(messageDiv);
   scrollToBottom();
+  return messageDiv;
 }
 
 function scrollToBottom() {
   messagesDiv.scrollTop = messagesDiv.scrollHeight;
 }
 
-// Connecting state (declared early — used inside connectWebsocket)
-let connectingMsgDiv = null;
-let serverReady = false;
-
-function showConnectingMessage() {
-  if (connectingMsgDiv) connectingMsgDiv.remove();
-  connectingMsgDiv = document.createElement("div");
-  connectingMsgDiv.className = "system-message";
-  connectingMsgDiv.textContent = "Connecting...";
-  messagesDiv.appendChild(connectingMsgDiv);
-  scrollToBottom();
-}
+let connectingMsg = null;
 
 // WebSocket handlers
 function connectWebsocket() {
   const ws_url = getWebSocketUrl();
   websocket = new WebSocket(ws_url);
-  showConnectingMessage();
+  if (connectingMsg) connectingMsg.remove();
+  connectingMsg = addSystemMessage("Connecting...");
 
   websocket.onopen = function () {
-    updateConnectionStatus("connecting");
+    updateConnectionStatus("connected");
+    if (connectingMsg) {
+      connectingMsg.remove();
+      connectingMsg = null;
+    }
+    startAudioButton.disabled = false;
+    pttToggle.disabled = false;
     // First message must be the setup payload (carries the per-browser glossary).
     websocket.send(JSON.stringify({ glossary: getGlossary() }));
   };
 
   websocket.onmessage = function (event) {
     const serverMsg = JSON.parse(event.data);
-
-    // Handle ready signal from server (warmup complete)
-    if (serverMsg.ready) {
-      onServerReady();
-      return;
-    }
 
     // Handle turn complete
     if (serverMsg.turnComplete === true) {
@@ -274,7 +265,6 @@ function connectWebsocket() {
       hasOutputTranscriptionInTurn = false;
       return;
     }
-
 
     // Handle input transcription (user's spoken words)
     if (serverMsg.inputTranscription && serverMsg.inputTranscription.text) {
@@ -398,10 +388,10 @@ function connectWebsocket() {
 
   websocket.onclose = function () {
     updateConnectionStatus("disconnected");
-    serverReady = false;
     startAudioButton.disabled = true;
     pttToggle.disabled = true;
-    showConnectingMessage();
+    if (connectingMsg) connectingMsg.remove();
+    connectingMsg = addSystemMessage("Connecting...");
     setTimeout(() => { connectWebsocket(); }, 5000);
   };
 
@@ -413,7 +403,6 @@ connectWebsocket();
 
 function reconnectWithNewLanguage() {
   sessionId = "demo-session-" + Math.random().toString(36).substring(7);
-  serverReady = false;
   updateConnectionStatus("connecting");
   startAudioButton.disabled = true;
   pttToggle.disabled = true;
@@ -458,10 +447,20 @@ function startAudio() {
     audioPlayerNode = node;
     audioPlayerContext = ctx;
   });
+  const startingMsg = addSystemMessage("Starting audio. Please wait...");
   startAudioRecorderWorklet(audioRecorderHandler, inputId).then(([node, ctx, stream]) => {
     audioRecorderNode = node;
     audioRecorderContext = ctx;
     micStream = stream;
+    setTimeout(() => {
+      if (startingMsg) startingMsg.remove();
+      const { src, tgt } = getLanguageNames();
+      addSystemMessage(`Ready for ${src} to ${tgt} translation`);
+      if (pttMode) {
+        startAudioButton.disabled = false;
+        is_audio = false;
+      }
+    }, 3000);
   });
 }
 
@@ -478,25 +477,6 @@ function getLanguageNames() {
   const src = document.getElementById("sourceLangTrigger").textContent;
   const tgt = document.getElementById("targetLangTrigger").textContent;
   return { src, tgt };
-}
-
-let pendingReadyAction = null;
-
-function onServerReady() {
-  serverReady = true;
-  updateConnectionStatus("connected");
-  if (connectingMsgDiv) {
-    connectingMsgDiv.remove();
-    connectingMsgDiv = null;
-  }
-  const { src, tgt } = getLanguageNames();
-  addSystemMessage(`Ready for ${src} to ${tgt} translation`);
-  if (!is_audio) startAudioButton.disabled = false;
-  pttToggle.disabled = false;
-  if (pendingReadyAction) {
-    pendingReadyAction();
-    pendingReadyAction = null;
-  }
 }
 
 // Always-on mode: click Start
@@ -517,22 +497,12 @@ pttToggle.addEventListener("change", () => {
       startAudioButton.textContent = "Hold to Talk";
       initAudioIfNeeded();
       is_audio = true;
-      if (!serverReady) {
-        pendingReadyAction = () => {
-          is_audio = false;
-          startAudioButton.disabled = false;
-        };
-      } else {
-        is_audio = false;
-        startAudioButton.disabled = false;
-      }
     } else {
       startAudioButton.disabled = false;
       startAudioButton.textContent = "Hold to Talk";
       is_audio = false;
     }
   } else {
-    pendingReadyAction = null;
     startAudioButton.classList.remove("ptt-mode");
     startAudioButton.classList.remove("ptt-active");
     startAudioButton.textContent = "Start";

@@ -88,7 +88,6 @@ Browser                          Server (FastAPI)                 Gemini Live AP
   |                                  |                                |
   |-- WebSocket /ws/{user}/{sid} --> |                                |
   |   (binary PCM frames)           |-- client.aio.live.connect() -->|
-  |                                  |   (session_resumption=handle)  |
   |                                  |                                |
   |                                  |<-- LiveServerMessage ---------|
   |<-- JSON envelope --------------- |                                |
@@ -101,9 +100,11 @@ FastAPI bridges one browser WebSocket to a series of Gemini Live API sessions. T
 
 1. Browser opens WebSocket to `/ws/{user_id}/{session_id}` and sends a JSON setup frame with the per-browser glossary
 2. Server builds a system instruction embedding the glossary and language pair
-3. A background coroutine opens `client.aio.live.connect()` with session resumption, runs warmup, then bridges audio
-4. When the upstream session expires (GoAway), the coroutine reopens with the latest resumption handle
-5. A separate coroutine forwards binary audio frames from the browser WS to whichever upstream session is current
+3. Two background coroutines run concurrently:
+   - **session_loop** opens a Gemini Live session, drains messages from it, and forwards them as JSON envelopes to the browser
+   - **upstream_task** forwards binary audio frames from the browser WS to whichever upstream session is current
+4. When the upstream session sends a GoAway (expiring in ~30s), the server immediately starts opening the next session in the background while continuing to drain the current one — this eliminates dead time between sessions
+5. Once the old session finishes, the pre-opened session takes over seamlessly
 
 **Wire format:** Each `LiveServerMessage` is translated into a camelCase JSON envelope the frontend understands (`turnComplete`, `inputTranscription`, `outputTranscription`, `content.parts[]`, `usageMetadata`).
 
@@ -113,26 +114,18 @@ Uses `gemini-3.1-flash-live-preview` via the Gemini API (`generativelanguage.goo
 
 The system instruction (built in `app/translator_agent/agent.py`) tells the model to translate only the current utterance and never repeat previous translations. The glossary is embedded as `source → target` pairs with case-insensitive matching.
 
-### Speech Warmup
+### GoAway Handling
 
-Every new Gemini Live session (including resumed ones) goes through a warmup phase before user audio flows through. The server sends a pre-recorded 0.6s "Hello" TTS clip (`app/warmup.pcm`, 16 kHz mono PCM) and waits for the model to respond with audio data. This serves two purposes:
+Gemini Live API sessions expire after ~15 minutes. When the server receives a GoAway message:
 
-1. **Primes the model** so it responds immediately to real user speech instead of taking several seconds on the first turn
-2. **Flushes context leaking** on resumed sessions (see below)
+1. A new session starts opening immediately in the background (`_open_next()`)
+2. The old session continues draining — any in-progress translation completes and is forwarded to the browser
+3. After the old session ends (or the GoAway deadline expires), the pre-opened session becomes the active session
+4. Audio from the browser is routed to the new session with no gap
 
-The warmup retries up to 5 times (3s timeout each). The server sends a `{"ready": true}` signal to the browser as soon as the first audio response is detected, rather than waiting for the full turn to complete — this cuts perceived warmup time roughly in half (~1s vs ~2s).
+**Limitation:** If GoAway fires mid-utterance, the translation in progress may be lost. The model on the new session has no context from the previous session, so it starts fresh. In practice this affects ~1-2% of translations during long sessions.
 
-The warmup audio is discarded server-side; it never reaches the browser.
-
-### Session Resumption and Context Leaking
-
-**Session resumption** carries model context across upstream session cycles, which is essential for seamless long conversations. Without it, the model loses all context every ~15 minutes when the Live API session expires.
-
-**The problem:** After resuming, the model sometimes prepends the previous turn's translation before the current one. Testing with `tests/repro_leak.py` confirmed this is a model-level behavior — it reproduced 100% of the time without mitigation.
-
-**The fix:** Sending actual speech (not silence) during warmup forces a full model turn that reliably flushes the replayed context. Testing showed 0 leaks across 10 consecutive resumed sessions with speech warmup, compared to 100% leak rate without it.
-
-Silence warmup was tried first but proved ineffective — the model needs to produce a real audio response to flush its internal replay buffer.
+Session resumption was intentionally removed — it caused an off-by-one translation cascade where the model would prepend the previous turn's translation to the current one. Without resumption, each session starts clean, which proved more reliable (98% pass rate vs 65% with resumption in 1-hour soak tests).
 
 ### SDK Note
 
@@ -201,11 +194,3 @@ Output Transcription Score
   avg=9.41  p50=10.00  9-10: 88.0%
 ```
 
-### Context Leak Reproduction
-
-`tests/repro_leak.py` is a standalone script that reproduces the session resumption context leaking bug. It synthesizes short sentences via TTS, sends them through the Live API with session resumption, and checks if output from previous turns appears in the current translation.
-
-```bash
-uv run python tests/repro_leak.py
-uv run python tests/repro_leak.py --max-rounds 50
-```

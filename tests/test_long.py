@@ -673,15 +673,6 @@ async def main():
         await ws.send(json.dumps({"glossary": TEST_GLOSSARY}))
         print(f"[{stamp()}] Connected, setup sent with glossary")
 
-        # Wait for the server warmup to complete before sending audio.
-        print(f"[{stamp()}] Waiting for server warmup...")
-        while True:
-            raw = await asyncio.wait_for(ws.recv(), timeout=30)
-            msg = json.loads(raw)
-            if msg.get("ready"):
-                print(f"[{stamp()}] Server ready")
-                break
-
         while time.monotonic() - start < args.duration:
             stats.iterations += 1
 
