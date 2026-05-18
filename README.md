@@ -78,7 +78,7 @@ The status indicator in the top-right corner shows:
 
 ## Technical Details
 
-### Architecture
+### Sequence Diagram
 
 ```mermaid
 sequenceDiagram
