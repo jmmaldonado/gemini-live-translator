@@ -89,7 +89,6 @@ sequenceDiagram
     B->>S: WS /ws/{user}/{sid}?src&tgt
     B->>S: JSON setup {glossary}
     S->>G: live.connect(sysInstruction)
-    G-->>S: session ready
 
     rect rgb(240, 248, 255)
     note over B,G: Translation loop (repeat per utterance)
