@@ -105,15 +105,6 @@ sequenceDiagram
     S-->>B: {turnComplete}
     end
 
-    rect rgb(255, 248, 240)
-    note over S,G: GoAway — session cycling (~15 min)
-    G-->>S: GoAway (time_left=30s)
-    S->>G: live.connect() (pre-open)
-    note over S: drain old session
-    G-->>S: turn_complete (old)
-    note over S: switch to new session
-    end
-
     B->>S: WS close
     S->>G: session close
 ```
@@ -143,6 +134,26 @@ The system instruction (built in `app/translator_agent/agent.py`) tells the mode
 ### GoAway Handling
 
 Gemini Live API sessions expire after ~15 minutes. When the server receives a GoAway message:
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant S as Server (FastAPI)
+    participant O as Old Session
+    participant N as New Session
+
+    O-->>S: GoAway (time_left=30s)
+    S->>N: live.connect() (pre-open in background)
+    note over S,O: drain old session — continue forwarding messages
+    O-->>S: outputTranscription / audio chunks
+    S-->>B: {outputTranscription} / {content}
+    O-->>S: turn_complete
+    S-->>B: {turnComplete}
+    note over S: old session done, switch to new
+    S-->>N: new session ready
+    B->>S: binary PCM 16kHz
+    S->>N: send_realtime_input(audio)
+```
 
 1. A new session starts opening immediately in the background (`_open_next()`)
 2. The old session continues draining — any in-progress translation completes and is forwarded to the browser
