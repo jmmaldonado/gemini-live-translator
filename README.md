@@ -95,10 +95,8 @@ sequenceDiagram
     note over B,G: Translation loop (repeat per utterance)
     B->>S: binary PCM 16kHz
     S->>G: send_realtime_input(audio)
-    G-->>S: inputTranscription
-    S-->>B: {inputTranscription}
-    G-->>S: outputTranscription (stream)
-    S-->>B: {outputTranscription}
+    G-->>S: input and output transcriptions
+    S-->>B: {inputTranscription}, {outputTranscription}
     G-->>S: model_turn audio chunk
     S-->>B: {content.parts[inlineData]}
     G-->>S: turn_complete
