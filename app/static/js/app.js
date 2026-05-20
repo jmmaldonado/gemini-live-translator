@@ -107,7 +107,9 @@ document.addEventListener("click", () => {
 // Populate language selectors from API
 async function loadLanguages() {
   const resp = await fetch("/api/languages");
-  const { languages, popular } = await resp.json();
+  const { languages, popular, model, vrModel } = await resp.json();
+  window._modelName = model;
+  window._vrModelName = vrModel;
   const allCodes = Object.keys(languages).sort((a, b) => languages[a].localeCompare(languages[b]));
 
   setupCustomSelect(
@@ -241,7 +243,12 @@ function connectWebsocket() {
     startAudioButton.disabled = false;
     pttToggle.disabled = false;
     // First message must be the setup payload (carries the per-browser glossary).
-    websocket.send(JSON.stringify({ glossary: getGlossary() }));
+    const setup = { glossary: getGlossary() };
+    const vrData = getVrData();
+    if (vrData.voiceSample && vrData.consentAudio) {
+      setup.voiceReplication = vrData;
+    }
+    websocket.send(JSON.stringify(setup));
   };
 
   websocket.onmessage = function (event) {
@@ -879,15 +886,257 @@ document.getElementById("applyAudio").addEventListener("click", async () => {
   audioOverlay.classList.add("hidden");
 });
 
-document.getElementById("openAudio").addEventListener("click", async () => {
-  audioOverlay.classList.remove("hidden");
-  await populateAudioDevices();
-});
-
 document.getElementById("closeAudio").addEventListener("click", () => {
   audioOverlay.classList.add("hidden");
 });
 
 audioOverlay.addEventListener("click", (e) => {
   if (e.target === audioOverlay) audioOverlay.classList.add("hidden");
+});
+
+/**
+ * Voice Replication (opt-in, per browser)
+ *
+ * Records voice sample and consent audio at 24kHz mono 16-bit WAV,
+ * stores as base64 in localStorage, and sends to the server in the
+ * setup message so the Gemini Live API can clone the user's voice.
+ */
+const VR_KEY = "live-translator.vr.voiceRecording";
+
+const vrSection = document.getElementById("vrSection");
+const vrToggle = document.getElementById("vrToggle");
+const vrStatus = document.getElementById("vrStatus");
+const vrRecordBtn = document.getElementById("vrRecord");
+const vrPlayBtn = document.getElementById("vrPlay");
+const vrClearBtn = document.getElementById("vrClear");
+const vrDurationSpan = document.getElementById("vrDuration");
+
+let vrRecordingCtx = null;
+let vrRecordingStream = null;
+let vrRecordingChunks = [];
+let vrIsRecording = false;
+let vrRecordingTimer = null;
+let vrRecordingStart = 0;
+let vrPlaybackCtx = null;
+let vrPlaybackSource = null;
+
+vrToggle.addEventListener("click", () => {
+  vrSection.classList.toggle("open");
+});
+
+function encodeWav24k(float32Samples) {
+  const numSamples = float32Samples.length;
+  const pcmBytes = numSamples * 2;
+  const buffer = new ArrayBuffer(44 + pcmBytes);
+  const view = new DataView(buffer);
+
+  const writeStr = (off, str) => {
+    for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i));
+  };
+
+  writeStr(0, "RIFF");
+  view.setUint32(4, 36 + pcmBytes, true);
+  writeStr(8, "WAVE");
+  writeStr(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, 24000, true);
+  view.setUint32(28, 48000, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, "data");
+  view.setUint32(40, pcmBytes, true);
+
+  let offset = 44;
+  for (let i = 0; i < numSamples; i++) {
+    const s = Math.max(-1, Math.min(1, float32Samples[i]));
+    view.setInt16(offset, s * 0x7fff, true);
+    offset += 2;
+  }
+
+  return new Uint8Array(buffer);
+}
+
+function arrayBufferToBase64(buf) {
+  const bytes = new Uint8Array(buf);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
+function base64ToArrayBuffer(b64) {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
+function getVrData() {
+  const b64 = localStorage.getItem(VR_KEY) || null;
+  return { voiceSample: b64, consentAudio: b64 };
+}
+
+function isVrEnabled() {
+  return !!localStorage.getItem(VR_KEY);
+}
+
+function getVrDurationStr() {
+  const b64 = localStorage.getItem(VR_KEY);
+  if (!b64) return "";
+  const rawBytes = b64.length * 3 / 4;
+  const pcmBytes = rawBytes - 44;
+  if (pcmBytes <= 0) return "";
+  const secs = pcmBytes / (24000 * 2);
+  return secs.toFixed(1) + "s";
+}
+
+function updateVrUi() {
+  const hasRecording = !!localStorage.getItem(VR_KEY);
+
+  vrPlayBtn.disabled = !hasRecording || vrIsRecording;
+  vrClearBtn.disabled = !hasRecording || vrIsRecording;
+  vrDurationSpan.textContent = getVrDurationStr();
+
+  if (hasRecording) {
+    const name = window._vrModelName || "VR model";
+    vrStatus.textContent = `Voice replication ready (${name}).`;
+    vrStatus.className = "vr-status ok";
+  } else {
+    const name = window._modelName || "default model";
+    vrStatus.textContent = `Using ${name}.`;
+    vrStatus.className = "vr-status";
+  }
+}
+
+async function startVrRecording() {
+  if (vrIsRecording) return;
+  vrIsRecording = true;
+  vrRecordingChunks = [];
+
+  try {
+    vrRecordingCtx = new AudioContext({ sampleRate: 24000 });
+    const constraints = { audio: { channelCount: 1 } };
+    const inputId = getSavedInputDevice();
+    if (inputId) constraints.audio.deviceId = { exact: inputId };
+    vrRecordingStream = await navigator.mediaDevices.getUserMedia(constraints);
+
+    const source = vrRecordingCtx.createMediaStreamSource(vrRecordingStream);
+    const processor = vrRecordingCtx.createScriptProcessor(4096, 1, 1);
+
+    processor.onaudioprocess = (e) => {
+      const data = e.inputBuffer.getChannelData(0);
+      vrRecordingChunks.push(new Float32Array(data));
+    };
+
+    source.connect(processor);
+    processor.connect(vrRecordingCtx.destination);
+
+    vrRecordingStart = performance.now();
+    vrRecordBtn.textContent = "Stop";
+    vrRecordBtn.classList.add("recording");
+
+    vrRecordingTimer = setInterval(() => {
+      const elapsed = (performance.now() - vrRecordingStart) / 1000;
+      vrDurationSpan.textContent = elapsed.toFixed(1) + "s";
+    }, 100);
+
+    updateVrUi();
+  } catch (err) {
+    vrIsRecording = false;
+    vrStatus.textContent = "Microphone access denied.";
+    vrStatus.className = "vr-status error";
+    updateVrUi();
+  }
+}
+
+function stopVrRecording() {
+  if (!vrIsRecording) return;
+
+  clearInterval(vrRecordingTimer);
+  vrRecordingTimer = null;
+
+  if (vrRecordingStream) {
+    vrRecordingStream.getTracks().forEach(t => t.stop());
+    vrRecordingStream = null;
+  }
+  if (vrRecordingCtx) {
+    vrRecordingCtx.close();
+    vrRecordingCtx = null;
+  }
+
+  let totalLen = 0;
+  for (const chunk of vrRecordingChunks) totalLen += chunk.length;
+  const merged = new Float32Array(totalLen);
+  let offset = 0;
+  for (const chunk of vrRecordingChunks) {
+    merged.set(chunk, offset);
+    offset += chunk.length;
+  }
+  vrRecordingChunks = [];
+  vrIsRecording = false;
+
+  const wav = encodeWav24k(merged);
+  const b64 = arrayBufferToBase64(wav.buffer);
+
+  try {
+    localStorage.setItem(VR_KEY, b64);
+  } catch (err) {
+    vrStatus.textContent = "Failed to save recording (storage full?).";
+    vrStatus.className = "vr-status error";
+  }
+
+  vrRecordBtn.textContent = "Record";
+  vrRecordBtn.classList.remove("recording");
+  updateVrUi();
+}
+
+async function playVrRecording() {
+  stopVrPlayback();
+  const b64 = localStorage.getItem(VR_KEY);
+  if (!b64) return;
+
+  try {
+    vrPlaybackCtx = new AudioContext({ sampleRate: 24000 });
+    const arrayBuf = base64ToArrayBuffer(b64);
+    const audioBuf = await vrPlaybackCtx.decodeAudioData(arrayBuf);
+    vrPlaybackSource = vrPlaybackCtx.createBufferSource();
+    vrPlaybackSource.buffer = audioBuf;
+    vrPlaybackSource.connect(vrPlaybackCtx.destination);
+    vrPlaybackSource.onended = () => stopVrPlayback();
+    vrPlaybackSource.start();
+  } catch {
+    stopVrPlayback();
+  }
+}
+
+function stopVrPlayback() {
+  if (vrPlaybackSource) {
+    try { vrPlaybackSource.stop(); } catch {}
+    vrPlaybackSource = null;
+  }
+  if (vrPlaybackCtx) {
+    vrPlaybackCtx.close();
+    vrPlaybackCtx = null;
+  }
+}
+
+function clearVrRecording() {
+  stopVrPlayback();
+  localStorage.removeItem(VR_KEY);
+  updateVrUi();
+}
+
+vrRecordBtn.addEventListener("click", () => {
+  if (vrIsRecording) stopVrRecording();
+  else startVrRecording();
+});
+
+vrPlayBtn.addEventListener("click", () => playVrRecording());
+vrClearBtn.addEventListener("click", () => clearVrRecording());
+
+document.getElementById("openAudio").addEventListener("click", async () => {
+  audioOverlay.classList.remove("hidden");
+  await populateAudioDevices();
+  updateVrUi();
 });

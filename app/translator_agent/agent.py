@@ -149,6 +149,7 @@ def _glossary_section(entries: list[GlossaryEntry]) -> str:
 
 
 MODEL = os.getenv("DEMO_AGENT_MODEL", "gemini-3.1-flash-live-preview")
+VR_MODEL = "gemini-3.1-flash-live-vr-eap"
 
 
 def build_system_instruction(

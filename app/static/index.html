@@ -18,7 +18,7 @@
         </a>
       </div>
       <div class="header-controls">
-        <button id="openAudio" class="toggle-console-btn">Audio</button>
+        <button id="openAudio" class="toggle-console-btn">Voice & Audio</button>
         <button id="openGlossary" class="toggle-console-btn">Glossary</button>
         <div class="connection-status">
           <span class="status-indicator connecting" id="statusIndicator"></span>
@@ -75,7 +75,7 @@
     <div class="modal-overlay hidden" id="audioOverlay">
       <div class="modal" role="dialog" aria-labelledby="audioTitle">
         <div class="modal-header">
-          <h2 id="audioTitle">Audio Settings</h2>
+          <h2 id="audioTitle">Voice & Audio Settings</h2>
           <button class="modal-close" id="closeAudio" aria-label="Close">&times;</button>
         </div>
         <div class="modal-body">
@@ -88,8 +88,35 @@
             <label for="audioOutputSelect">Speaker</label>
             <select id="audioOutputSelect"></select>
           </div>
+          <div class="vr-section" id="vrSection">
+            <div class="vr-section-header" id="vrToggle">
+              <span class="vr-chevron">&#9654;</span>
+              <span>Voice Replication (opt-in)</span>
+            </div>
+            <div class="vr-section-body">
+              <p class="modal-hint">
+                Record your voice reading the phrase below to enable voice
+                replication. The translated audio will be spoken in your
+                cloned voice. The recording is stored locally in your browser.
+              </p>
+              <blockquote class="vr-consent-phrase">
+                "I am the owner of this voice and I consent to Google using this
+                voice to create a synthetic voice model."
+              </blockquote>
+              <div class="vr-recording-row">
+                <label>Voice Recording</label>
+                <div class="vr-controls">
+                  <button id="vrRecord" type="button">Record</button>
+                  <span id="vrDuration" class="vr-duration"></span>
+                  <button id="vrPlay" type="button" disabled>Play</button>
+                  <button id="vrClear" type="button" class="vr-clear" disabled>Clear</button>
+                </div>
+              </div>
+              <div id="vrStatus" class="vr-status"></div>
+            </div>
+          </div>
           <div class="audio-actions">
-            <button id="applyAudio" type="button">Change Audio Settings</button>
+            <button id="applyAudio" type="button">Change Voice and Audio Settings</button>
           </div>
         </div>
       </div>

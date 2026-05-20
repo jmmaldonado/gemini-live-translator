@@ -8,6 +8,7 @@ import os
 import sys
 import unicodedata
 import warnings
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -32,6 +33,7 @@ from translator_agent import (  # noqa: E402
     LANGUAGES,
     MODEL,
     POPULAR_LANGUAGES,
+    VR_MODEL,
     build_system_instruction,
     load_default_glossary,
 )
@@ -90,7 +92,12 @@ async def root():
 @app.get("/api/languages")
 async def get_languages():
     """Return available languages with popular ones highlighted."""
-    return {"languages": LANGUAGES, "popular": POPULAR_LANGUAGES}
+    return {
+        "languages": LANGUAGES,
+        "popular": POPULAR_LANGUAGES,
+        "model": MODEL,
+        "vrModel": VR_MODEL,
+    }
 
 
 @app.get("/api/glossary/defaults")
@@ -104,12 +111,19 @@ async def get_default_glossary():
     }
 
 
-def _parse_setup(raw: str) -> list[tuple[str, str, str]]:
-    """Parse the client's setup message into validated glossary triples."""
+@dataclass
+class SetupData:
+    glossary: list[tuple[str, str, str]] = field(default_factory=list)
+    vr_voice_sample: bytes | None = None
+    vr_consent_audio: bytes | None = None
+
+
+def _parse_setup(raw: str) -> SetupData:
+    """Parse the client's setup message into glossary + optional voice replication data."""
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
-        return []
+        return SetupData()
     entries: list[tuple[str, str, str]] = []
     for entry in (data.get("glossary") or [])[:MAX_GLOSSARY_ENTRIES]:
         if not isinstance(entry, dict):
@@ -121,7 +135,25 @@ def _parse_setup(raw: str) -> list[tuple[str, str, str]]:
         disp_raw = entry.get("transcription")
         disp = disp_raw.strip() if isinstance(disp_raw, str) and disp_raw.strip() else tgt
         entries.append((src, tgt, disp))
-    return entries
+
+    vr_sample = None
+    vr_consent = None
+    vr = data.get("voiceReplication")
+    if isinstance(vr, dict):
+        sample_b64 = vr.get("voiceSample")
+        consent_b64 = vr.get("consentAudio")
+        if isinstance(sample_b64, str) and isinstance(consent_b64, str):
+            try:
+                vr_sample = base64.b64decode(sample_b64)
+                vr_consent = base64.b64decode(consent_b64)
+                logger.info(
+                    "Voice replication: sample=%d bytes, consent=%d bytes",
+                    len(vr_sample), len(vr_consent),
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning("Invalid base64 in voiceReplication data")
+
+    return SetupData(glossary=entries, vr_voice_sample=vr_sample, vr_consent_audio=vr_consent)
 
 
 def _envelope_from(msg: types.LiveServerMessage) -> dict | None:
@@ -197,13 +229,13 @@ async def websocket_endpoint(
     # Wait for the client's setup message (carries the per-session glossary).
     # Falls back to the on-disk default glossary if the client doesn't send one
     # within SETUP_TIMEOUT_SEC (older clients, network hiccups).
-    glossary_entries: list[tuple[str, str, str]] | None = None
+    setup_data: SetupData | None = None
     try:
         setup_raw = await asyncio.wait_for(
             websocket.receive_text(), timeout=SETUP_TIMEOUT_SEC
         )
-        glossary_entries = _parse_setup(setup_raw)
-        logger.debug("Setup received: %d glossary entries", len(glossary_entries))
+        setup_data = _parse_setup(setup_raw)
+        logger.debug("Setup received: %d glossary entries", len(setup_data.glossary))
     except asyncio.TimeoutError:
         logger.warning(
             "No setup message within %ds; using default glossary.", SETUP_TIMEOUT_SEC
@@ -212,10 +244,18 @@ async def websocket_endpoint(
         logger.debug("Client disconnected before sending setup")
         return
 
+    glossary_entries = setup_data.glossary if setup_data else None
+    vr_voice_sample = setup_data.vr_voice_sample if setup_data else None
+    vr_consent_audio = setup_data.vr_consent_audio if setup_data else None
+    vr_enabled = vr_voice_sample is not None and vr_consent_audio is not None
+
     system_instruction = build_system_instruction(source, target, glossary_entries)
     display_map = _build_display_map(
         glossary_entries if glossary_entries is not None else load_default_glossary()
     )
+    active_model = VR_MODEL if vr_enabled else MODEL
+    if vr_enabled:
+        logger.info("Voice replication enabled, using model %s", active_model)
 
     # Shared state between the upstream forwarder and the session loop. The
     # forwarder has the lifetime of the browser WebSocket and writes to whichever
@@ -255,7 +295,7 @@ async def websocket_endpoint(
         nonlocal current_session
 
         def _build_config():
-            return types.LiveConnectConfig(
+            cfg = types.LiveConnectConfig(
                 response_modalities=[types.Modality.AUDIO],
                 input_audio_transcription=types.AudioTranscriptionConfig(),
                 output_audio_transcription=types.AudioTranscriptionConfig(),
@@ -263,6 +303,17 @@ async def websocket_endpoint(
                     parts=[types.Part(text=system_instruction)]
                 ),
             )
+            if vr_enabled:
+                cfg.speech_config = types.SpeechConfig(
+                    voice_config=types.VoiceConfig(
+                        replicated_voice_config=types.ReplicatedVoiceConfig(
+                            mime_type="audio/wav",
+                            voice_sample_audio=vr_voice_sample,
+                            consent_audio=vr_consent_audio,
+                        )
+                    )
+                )
+            return cfg
 
         next_ready = asyncio.Event()
         next_session_ref: list = [None]
@@ -273,7 +324,7 @@ async def websocket_endpoint(
             """Open and store the next session (runs concurrently with drain)."""
             try:
                 cfg = _build_config()
-                conn = client.aio.live.connect(model=MODEL, config=cfg)
+                conn = client.aio.live.connect(model=active_model, config=cfg)
                 sess = await conn.__aenter__()
                 next_session_ref[0] = sess
                 next_conn_ref[0] = conn
@@ -307,7 +358,7 @@ async def websocket_endpoint(
                     logger.debug("Using pre-opened session")
                 else:
                     cfg = _build_config()
-                    conn = client.aio.live.connect(model=MODEL, config=cfg)
+                    conn = client.aio.live.connect(model=active_model, config=cfg)
                     session = await conn.__aenter__()
                     logger.debug("Opened fresh Live session")
 
