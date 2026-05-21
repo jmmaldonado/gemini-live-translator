@@ -998,14 +998,15 @@ function updateVrUi() {
   vrClearBtn.disabled = !hasRecording || vrIsRecording;
   vrDurationSpan.textContent = getVrDurationStr();
 
+  const modelDisplay = document.getElementById("modelNameDisplay");
   if (hasRecording) {
-    const name = window._vrModelName || "VR model";
-    vrStatus.textContent = `Voice replication ready (${name}).`;
+    vrStatus.textContent = "Voice replication ready.";
     vrStatus.className = "vr-status ok";
+    if (modelDisplay) modelDisplay.textContent = window._vrModelName || "";
   } else {
-    const name = window._modelName || "default model";
-    vrStatus.textContent = `Using ${name}.`;
+    vrStatus.textContent = "";
     vrStatus.className = "vr-status";
+    if (modelDisplay) modelDisplay.textContent = window._modelName || "";
   }
 }
 
