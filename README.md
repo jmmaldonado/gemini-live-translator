@@ -162,12 +162,12 @@ Session resumption was intentionally removed — it caused an off-by-one transla
 
 ### Gemini Live API Transient Errors and Recovery
 
-The Gemini Live API occasionally returns `1011 (service currently unavailable)` errors. In production logs, these occur roughly once per hour in two patterns:
+The Gemini Live API occasionally returns `1011 (service currently unavailable)` errors. Before the recovery fix, production logs showed ~20 errors per 24 hours in two patterns:
 
 - **Mid-session kill** (~65% of cases): An active session is disconnected during `session.receive()`. The session was working, then Gemini drops it.
 - **Connect-time rejection** (~35% of cases): Gemini refuses to open a new session entirely. This typically follows a mid-session kill — the retry fails because Gemini is still recovering.
 
-These errors cascade: a mid-session kill triggers a retry, which may also get rejected, but the API typically recovers within 1–3 seconds.
+These errors cascaded: a mid-session kill triggered a retry with a flat 1s delay, which was often also rejected because Gemini was still unavailable. The session connect call had no timeout, so it could hang indefinitely on unresponsive connections.
 
 **Recovery logic in `session_loop`:**
 
@@ -175,7 +175,9 @@ These errors cascade: a mid-session kill triggers a retry, which may also get re
 2. **Exponential backoff**: Retries start at 0.2s and double on each consecutive failure, capping at 4s. The backoff resets after a successful session. This avoids thrashing the API while still recovering quickly from transient blips.
 3. **Transparent reconnect**: The browser WebSocket stays open during retries — only the upstream Gemini session is affected. Once a new session opens, `upstream_task` resumes forwarding audio to it automatically.
 
-For real users streaming from a microphone, recovery is seamless — the new session picks up the live audio stream with a brief gap of ~0.2–3s. For health checks that send a one-shot audio clip, the clip may be lost if the session dies before producing a response.
+After the fix, production logs showed 1 error in 15 hours (vs ~12 in the same period before), with zero connect-time rejections — the faster initial retry reconnects before the cascading failure pattern kicks in.
+
+For real users streaming from a microphone, recovery is seamless — the new session picks up the live audio stream with a brief gap. For health checks that send a one-shot audio clip, the clip may be lost if the session dies before producing a response.
 
 ### SDK Note
 
