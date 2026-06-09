@@ -1,6 +1,6 @@
 # Live Translator
 
-Real-time audio translation powered by Gemini Live API. Speak in any language and hear the translation immediately. Supports 97 languages.
+Real-time audio translation powered by Gemini Live API. Speak in any language and hear the translation immediately. Two modes: agent mode (97 languages, glossary, voice replication) and simultaneous translation mode (78 languages, auto-detect source language).
 
 ![Demo](demo.gif)
 
@@ -40,9 +40,23 @@ Open http://localhost:8000.
 2. Click **Start** to begin continuous translation (always-on mode)
 3. Speak into your microphone — translations appear as text bubbles and play as audio
 
+### Simultaneous Translation
+
+Toggle **Simul** to switch to simultaneous translation mode. This uses the `gemini-3.5-live-translate-preview` model which auto-detects the source language — the source language selector is hidden and only a target language dropdown is shown.
+
+Differences from agent mode:
+- **Auto-detect**: no need to select a source language
+- **78 languages** supported (vs 97 in agent mode)
+- **No glossary**: custom term pinning is not available
+- **No voice replication**: the Voice Replication section is disabled in Voice & Audio settings
+- **Idle timer**: since the model doesn't send turn-complete signals, transcription bubbles are finalized after 2 seconds of silence
+
+Language selections are preserved when switching modes — codes are mapped automatically between the two language sets (e.g. `zh` ↔ `zh-Hans`).
+
 ### Push to Talk
 
 Toggle **Push to Talk** on the right to switch from always-on to manual control. Hold the **Hold to Talk** button (or press spacebar) to transmit, release to stop.
+
 ### Audio Settings
 
 Click **Audio** in the header to select which microphone and speaker to use. Choices are saved in your browser and applied on the next session.
@@ -86,7 +100,7 @@ sequenceDiagram
     participant S as Server (FastAPI)
     participant G as Gemini Live API
 
-    B->>S: WS /ws/{user}/{sid}?src&tgt
+    B->>S: WS /ws/{user}/{sid}?src&tgt[&simul]
     B->>S: JSON setup {glossary}
     S->>G: live.connect(sysInstruction)
 
@@ -122,11 +136,13 @@ FastAPI bridges one browser WebSocket to a series of Gemini Live API sessions. T
 
 **Transcription behavior:** Output transcription (the translated speech) streams in multiple partial chunks, so the UI can show word-by-word updates with a typing indicator. Input transcription (the user's spoken words) arrives as a single message with the complete text — the API does not stream partial input transcriptions, so the user's bubble appears all at once.
 
-### Model
+### Models
 
-Uses `gemini-3.1-flash-live-preview` via the Gemini API (`generativelanguage.googleapis.com`). Audio input is 16 kHz mono PCM; output is 24 kHz PCM.
+**Agent mode** uses `gemini-3.1-flash-live-preview` via the Gemini API (`generativelanguage.googleapis.com`). The system instruction (built in `app/translator_agent/agent.py`) tells the model to translate only the current utterance and never repeat previous translations. The glossary is embedded as `source → target` pairs with case-insensitive matching.
 
-The system instruction (built in `app/translator_agent/agent.py`) tells the model to translate only the current utterance and never repeat previous translations. The glossary is embedded as `source → target` pairs with case-insensitive matching.
+**Simultaneous translation mode** uses `gemini-3.5-live-translate-preview` with a `TranslationConfig` instead of system instructions. The config specifies `target_language_code` and `echo_target_language=True` (so the model echoes back what it hears in the target language). This model auto-detects the source language and does not support tools, glossary, or voice replication.
+
+Audio input is 16 kHz mono PCM; output is 24 kHz PCM (both modes).
 
 ### GoAway Handling
 
