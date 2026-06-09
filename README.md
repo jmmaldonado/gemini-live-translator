@@ -81,6 +81,18 @@ Changes take effect on the next session (click **Start** again, or change langua
 
 Edit `app/dict.csv` and redeploy. Browsers with a cached glossary keep using it until the user clicks **Reset to defaults** in the modal.
 
+### Overlay (Lower-Third Subtitles)
+
+Open `/overlay` in a separate browser window to display translated text as a lower-third overlay — useful for presentations at onsite events or screen sharing via Google Meet.
+
+1. Open `http://localhost:8000` in one tab and start translating
+2. Open `http://localhost:8000/overlay` in another window
+3. The overlay shows the last 2–3 lines of output transcription, which fade out after 8 seconds of silence
+
+The main page relays transcription to the overlay via the [BroadcastChannel API](https://developer.mozilla.org/en-US/docs/Web/API/BroadcastChannel), so both pages must run in the same browser.
+
+**With OBS:** Add a Browser Source pointing to `http://localhost:8000/overlay`, set the resolution to match your desktop, and add `body { background: transparent !important; }` as Custom CSS. The OBS overlay window will be visible when sharing your desktop on Google Meet.
+
 ### Connection States
 
 The status indicator in the top-right corner shows:

@@ -9,6 +9,7 @@
 const userId = "demo-user";
 let sessionId = "demo-session-" + Math.random().toString(36).substring(7);
 let websocket = null;
+const overlayChannel = new BroadcastChannel("live-translator");
 let is_audio = false;
 let pttMode = false;
 let audioInitialized = false;
@@ -322,6 +323,7 @@ function connectWebsocket() {
 
   websocket.onopen = function () {
     updateConnectionStatus("connected");
+    overlayChannel.postMessage({ type: "connected" });
     if (connectingMsg) {
       connectingMsg.remove();
       connectingMsg = null;
@@ -344,6 +346,7 @@ function connectWebsocket() {
     if (serverMsg.turnComplete === true) {
       if (simulIdleTimer) { clearTimeout(simulIdleTimer); simulIdleTimer = null; }
       finalizeTurn();
+      overlayChannel.postMessage({ type: "turnComplete" });
       return;
     }
 
@@ -404,6 +407,11 @@ function connectWebsocket() {
           }
         }
 
+        overlayChannel.postMessage({
+          type: "outputTranscription",
+          text: applyDisplayMap(currentOutputRawText),
+          finished: isFinished,
+        });
         if (isFinished) {
           currentOutputTranscriptionId = null;
           currentOutputTranscriptionElement = null;
@@ -450,6 +458,7 @@ function connectWebsocket() {
   websocket.onclose = function () {
     if (simulIdleTimer) { clearTimeout(simulIdleTimer); simulIdleTimer = null; }
     updateConnectionStatus("disconnected");
+    overlayChannel.postMessage({ type: "disconnected" });
     startAudioButton.disabled = true;
     pttToggle.disabled = true;
     if (connectingMsg) connectingMsg.remove();
@@ -1252,6 +1261,10 @@ vrRecordBtn.addEventListener("click", () => {
 
 vrPlayBtn.addEventListener("click", () => playVrRecording());
 vrClearBtn.addEventListener("click", () => clearVrRecording());
+
+document.getElementById("openOverlay").addEventListener("click", () => {
+  window.open("/overlay", "live-translator-overlay", "popup,width=960,height=200");
+});
 
 document.getElementById("openAudio").addEventListener("click", async () => {
   audioOverlay.classList.remove("hidden");
