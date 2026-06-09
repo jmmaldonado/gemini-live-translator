@@ -1263,7 +1263,7 @@ vrPlayBtn.addEventListener("click", () => playVrRecording());
 vrClearBtn.addEventListener("click", () => clearVrRecording());
 
 document.getElementById("openOverlay").addEventListener("click", () => {
-  window.open("/overlay", "live-translator-overlay", "popup,width=960,height=200");
+  window.open("/caption", "live-translator-caption");
 });
 
 document.getElementById("openAudio").addEventListener("click", async () => {

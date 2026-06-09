@@ -81,17 +81,17 @@ Changes take effect on the next session (click **Start** again, or change langua
 
 Edit `app/dict.csv` and redeploy. Browsers with a cached glossary keep using it until the user clicks **Reset to defaults** in the modal.
 
-### Overlay (Lower-Third Subtitles)
+### Caption Overlay
 
-Open `/overlay` in a separate browser window to display translated text as a lower-third overlay — useful for presentations at onsite events or screen sharing via Google Meet.
+Overlay translated subtitles on top of any window — useful for presentations at onsite events or screen sharing via Google Meet. Click **Caption** in the header to open the caption page, or navigate to `/caption` manually.
 
-1. Open `http://localhost:8000` in one tab and start translating
-2. Open `http://localhost:8000/overlay` in another window
-3. The overlay shows the last 2–3 lines of output transcription, which fade out after 8 seconds of silence
+1. Open the main app in Chrome and click **Start** to begin translating
+2. Click **Caption** in the header — a new window opens with a "Select Window" button
+3. Click **Select Window** and pick the window to mirror (e.g. your slides, Keynote, or any app)
+4. The selected window's content streams into the caption page with translated subtitles at the bottom
+5. Share this caption window on Google Meet — participants see your slides with live subtitles
 
-The main page relays transcription to the overlay via the [BroadcastChannel API](https://developer.mozilla.org/en-US/docs/Web/API/BroadcastChannel), so both pages must run in the same browser.
-
-**With OBS:** Add a Browser Source pointing to `http://localhost:8000/overlay`, set the resolution to match your desktop, and add `body { background: transparent !important; }` as Custom CSS. The OBS overlay window will be visible when sharing your desktop on Google Meet.
+The caption page uses the [Screen Capture API](https://developer.mozilla.org/en-US/docs/Web/API/Screen_Capture_API) to mirror the target window and the [BroadcastChannel API](https://developer.mozilla.org/en-US/docs/Web/API/BroadcastChannel) to receive transcription from the main page, so both pages must run in the same browser. No OBS or third-party tools needed.
 
 ### Connection States
 

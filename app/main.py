@@ -96,10 +96,10 @@ async def root():
     return FileResponse(Path(__file__).parent / "static" / "index.html")
 
 
-@app.get("/overlay")
-async def overlay():
-    """Serve the overlay page for lower-third transcription display."""
-    return FileResponse(Path(__file__).parent / "static" / "overlay.html")
+@app.get("/caption")
+async def caption():
+    """Serve the caption overlay page (window mirror + subtitles)."""
+    return FileResponse(Path(__file__).parent / "static" / "caption.html")
 
 
 @app.get("/api/languages")
