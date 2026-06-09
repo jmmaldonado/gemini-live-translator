@@ -85,6 +85,8 @@ Edit `app/dict.csv` and redeploy. Browsers with a cached glossary keep using it 
 
 Overlay translated subtitles on top of any window — useful for presentations at onsite events or screen sharing via Google Meet. Click **Caption** in the header to open the caption page, or navigate to `/caption` manually.
 
+![Caption Overlay](caption.png)
+
 1. Open the main app in Chrome and click **Start** to begin translating
 2. Click **Caption** in the header — a new window opens with a "Select Window" button
 3. Click **Select Window** and pick the window to mirror (e.g. your slides, Keynote, or any app)
