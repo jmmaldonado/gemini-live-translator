@@ -548,18 +548,17 @@ function applySimulUi() {
   const autoDetectLabel = document.getElementById("autoDetectLabel");
   const sourceLangWrapper = document.getElementById("sourceLangWrapper");
   const swapBtn = document.getElementById("swapLangs");
+  const glossarySimulNote = document.getElementById("glossarySimulNote");
   if (simulMode) {
-    glossaryBtn.disabled = true;
-    glossaryBtn.textContent = "Glossary is not available";
     sourceLangWrapper.style.display = "none";
     swapBtn.style.display = "none";
     autoDetectLabel.style.display = "";
+    if (glossarySimulNote) glossarySimulNote.style.display = "";
   } else {
-    glossaryBtn.disabled = false;
-    glossaryBtn.textContent = "Glossary";
     sourceLangWrapper.style.display = "";
     swapBtn.style.display = "";
     autoDetectLabel.style.display = "none";
+    if (glossarySimulNote) glossarySimulNote.style.display = "none";
   }
 }
 applySimulUi();

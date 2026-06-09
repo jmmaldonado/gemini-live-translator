@@ -35,6 +35,13 @@
           <button class="modal-close" id="closeGlossary" aria-label="Close">×</button>
         </div>
         <div class="modal-body">
+          <div id="glossarySimulNote" class="glossary-simul-note" style="display:none">
+            <strong>Simultaneous mode:</strong> The translation model does not
+            use the glossary — it will translate terms in its own way. However,
+            display replacements still work: if the model's output contains a
+            glossary <em>target</em> term, it will be replaced with the
+            <em>transcription</em> column on screen and in captions.
+          </div>
           <p class="modal-hint">
             Replace this browser's glossary by loading a UTF-8 CSV with one
             <code>source,target[,transcription]</code> per line. The optional
