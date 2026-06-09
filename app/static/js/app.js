@@ -13,6 +13,9 @@ let is_audio = false;
 let pttMode = false;
 let audioInitialized = false;
 
+const SIMUL_KEY = "live-translator.simul";
+let simulMode = localStorage.getItem(SIMUL_KEY) === "true";
+
 const sourceLangSelect = document.getElementById("sourceLang");
 const targetLangSelect = document.getElementById("targetLang");
 
@@ -38,13 +41,14 @@ const targetLangSelect = document.getElementById("targetLang");
 }
 
 // Custom dropdown logic
-function setupCustomSelect(hiddenInput, trigger, dropdown, defaultCode, languages, popular, allCodes) {
+function populateDropdown(hiddenInput, trigger, dropdown, selectedCode, languages, popular, allCodes) {
   dropdown.innerHTML = "";
+  let foundSelected = false;
 
   function addOption(code) {
     const div = document.createElement("div");
     div.className = "custom-select-option";
-    if (code === defaultCode) div.classList.add("selected");
+    if (code === selectedCode) { div.classList.add("selected"); foundSelected = true; }
     div.textContent = languages[code];
     div.dataset.value = code;
     div.addEventListener("click", () => {
@@ -63,6 +67,21 @@ function setupCustomSelect(hiddenInput, trigger, dropdown, defaultCode, language
   divider.className = "custom-select-divider";
   dropdown.appendChild(divider);
   for (const code of allCodes) addOption(code);
+
+  if (foundSelected) {
+    hiddenInput.value = selectedCode;
+    trigger.textContent = languages[selectedCode];
+  } else if (popular.length > 0) {
+    const fallback = popular[0];
+    hiddenInput.value = fallback;
+    trigger.textContent = languages[fallback];
+    const first = dropdown.querySelector('.custom-select-option');
+    if (first) first.classList.add("selected");
+  }
+}
+
+function setupCustomSelect(hiddenInput, trigger, dropdown, defaultCode, languages, popular, allCodes) {
+  populateDropdown(hiddenInput, trigger, dropdown, defaultCode, languages, popular, allCodes);
 
   trigger.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -105,21 +124,50 @@ document.addEventListener("click", () => {
 });
 
 // Populate language selectors from API
+let agentLangs = {}, agentPopular = [], agentAllCodes = [];
+let simulLangs = {}, simulPopularList = [], simulAllCodes = [];
+
+const AGENT_TO_SIMUL = { "zh": "zh-Hans", "iw": "he", "pt": "pt-BR" };
+const SIMUL_TO_AGENT = { "zh-Hans": "zh", "zh-Hant": "zh", "he": "iw", "pt-BR": "pt", "pt-PT": "pt" };
+
+function rebuildTargetDropdown() {
+  const langs = simulMode ? simulLangs : agentLangs;
+  const popular = simulMode ? simulPopularList : agentPopular;
+  const codes = simulMode ? simulAllCodes : agentAllCodes;
+  const mapTable = simulMode ? AGENT_TO_SIMUL : SIMUL_TO_AGENT;
+  let current = targetLangSelect.value;
+  if (!(current in langs) && current in mapTable) current = mapTable[current];
+  populateDropdown(
+    targetLangSelect, document.getElementById("targetLangTrigger"),
+    document.getElementById("targetLangDropdown"), current, langs, popular, codes
+  );
+}
+
 async function loadLanguages() {
   const resp = await fetch("/api/languages");
-  const { languages, popular, model, vrModel } = await resp.json();
-  window._modelName = model;
-  window._vrModelName = vrModel;
-  const allCodes = Object.keys(languages).sort((a, b) => languages[a].localeCompare(languages[b]));
+  const data = await resp.json();
+  window._modelName = data.model;
+  window._vrModelName = data.vrModel;
+  window._simulModelName = data.simulModel;
+
+  agentLangs = data.languages;
+  agentPopular = data.popular;
+  agentAllCodes = Object.keys(agentLangs).sort((a, b) => agentLangs[a].localeCompare(agentLangs[b]));
+
+  simulLangs = data.simulLanguages;
+  simulPopularList = data.simulPopular;
+  simulAllCodes = Object.keys(simulLangs).sort((a, b) => simulLangs[a].localeCompare(simulLangs[b]));
 
   setupCustomSelect(
     sourceLangSelect, document.getElementById("sourceLangTrigger"),
-    document.getElementById("sourceLangDropdown"), "en", languages, popular, allCodes
+    document.getElementById("sourceLangDropdown"), "en", agentLangs, agentPopular, agentAllCodes
   );
   setupCustomSelect(
     targetLangSelect, document.getElementById("targetLangTrigger"),
-    document.getElementById("targetLangDropdown"), "ja", languages, popular, allCodes
+    document.getElementById("targetLangDropdown"), "ja", agentLangs, agentPopular, agentAllCodes
   );
+
+  if (simulMode) rebuildTargetDropdown();
 }
 loadLanguages();
 
@@ -127,7 +175,9 @@ function getWebSocketUrl() {
   const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const source = sourceLangSelect.value;
   const target = targetLangSelect.value;
-  return wsProtocol + "//" + window.location.host + "/ws/" + userId + "/" + sessionId + "?source=" + source + "&target=" + target;
+  let url = wsProtocol + "//" + window.location.host + "/ws/" + userId + "/" + sessionId + "?source=" + source + "&target=" + target;
+  if (simulMode) url += "&simul=true";
+  return url;
 }
 
 // Get DOM elements
@@ -144,6 +194,42 @@ let currentOutputTranscriptionElement = null;
 let currentOutputRawText = "";
 let inputTranscriptionFinished = false;
 let hasOutputTranscriptionInTurn = false;
+let simulIdleTimer = null;
+const SIMUL_IDLE_MS = 2000;
+
+function finalizeTurn() {
+  if (currentBubbleElement) {
+    const ti = currentBubbleElement.querySelector(".typing-indicator");
+    if (ti) ti.remove();
+  }
+  if (currentOutputTranscriptionElement) {
+    const ti = currentOutputTranscriptionElement.querySelector(".typing-indicator");
+    if (ti) ti.remove();
+  }
+  if (currentInputTranscriptionElement) {
+    const ti = currentInputTranscriptionElement.querySelector(".typing-indicator");
+    if (ti) ti.remove();
+  }
+  currentMessageId = null;
+  currentBubbleElement = null;
+  currentInputTranscriptionId = null;
+  currentInputTranscriptionElement = null;
+  currentInputRawText = "";
+  currentOutputTranscriptionId = null;
+  currentOutputTranscriptionElement = null;
+  currentOutputRawText = "";
+  inputTranscriptionFinished = false;
+  hasOutputTranscriptionInTurn = false;
+}
+
+function resetSimulIdleTimer() {
+  if (!simulMode) return;
+  if (simulIdleTimer) clearTimeout(simulIdleTimer);
+  simulIdleTimer = setTimeout(() => {
+    simulIdleTimer = null;
+    finalizeTurn();
+  }, SIMUL_IDLE_MS);
+}
 
 // Helper function to clean spaces between CJK characters
 function cleanCJKSpaces(text) {
@@ -256,24 +342,8 @@ function connectWebsocket() {
 
     // Handle turn complete
     if (serverMsg.turnComplete === true) {
-      if (currentBubbleElement) {
-        const ti = currentBubbleElement.querySelector(".typing-indicator");
-        if (ti) ti.remove();
-      }
-      if (currentOutputTranscriptionElement) {
-        const ti = currentOutputTranscriptionElement.querySelector(".typing-indicator");
-        if (ti) ti.remove();
-      }
-      currentMessageId = null;
-      currentBubbleElement = null;
-      currentInputTranscriptionId = null;
-      currentInputTranscriptionElement = null;
-      currentInputRawText = "";
-      currentOutputTranscriptionId = null;
-      currentOutputTranscriptionElement = null;
-      currentOutputRawText = "";
-      inputTranscriptionFinished = false;
-      hasOutputTranscriptionInTurn = false;
+      if (simulIdleTimer) { clearTimeout(simulIdleTimer); simulIdleTimer = null; }
+      finalizeTurn();
       return;
     }
 
@@ -306,6 +376,7 @@ function connectWebsocket() {
           inputTranscriptionFinished = true;
         }
         scrollToBottom();
+        resetSimulIdleTimer();
       }
     }
 
@@ -339,6 +410,7 @@ function connectWebsocket() {
           currentOutputRawText = "";
         }
         scrollToBottom();
+        resetSimulIdleTimer();
       }
     }
 
@@ -376,6 +448,7 @@ function connectWebsocket() {
   };
 
   websocket.onclose = function () {
+    if (simulIdleTimer) { clearTimeout(simulIdleTimer); simulIdleTimer = null; }
     updateConnectionStatus("disconnected");
     startAudioButton.disabled = true;
     pttToggle.disabled = true;
@@ -402,7 +475,7 @@ function reconnectWithNewLanguage() {
   messagesDiv.innerHTML = '';
   const srcName = document.getElementById("sourceLangTrigger").textContent;
   const tgtName = document.getElementById("targetLangTrigger").textContent;
-  addSystemMessage(`Language changed: ${srcName} → ${tgtName}`);
+  addSystemMessage(`${srcName} → ${tgtName}${simulMode ? " (Simultaneous)" : ""}`);
   connectWebsocket();
 }
 
@@ -456,6 +529,39 @@ function startAudio() {
 
 const startAudioButton = document.getElementById("startAudioButton");
 const pttToggle = document.getElementById("pttToggle");
+const simulToggle = document.getElementById("simulToggle");
+
+simulToggle.checked = simulMode;
+
+function applySimulUi() {
+  const glossaryBtn = document.getElementById("openGlossary");
+  const langSelector = document.querySelector(".language-selector");
+  const autoDetectLabel = document.getElementById("autoDetectLabel");
+  const sourceLangWrapper = document.getElementById("sourceLangWrapper");
+  const swapBtn = document.getElementById("swapLangs");
+  if (simulMode) {
+    glossaryBtn.disabled = true;
+    glossaryBtn.textContent = "Glossary is not available";
+    sourceLangWrapper.style.display = "none";
+    swapBtn.style.display = "none";
+    autoDetectLabel.style.display = "";
+  } else {
+    glossaryBtn.disabled = false;
+    glossaryBtn.textContent = "Glossary";
+    sourceLangWrapper.style.display = "";
+    swapBtn.style.display = "";
+    autoDetectLabel.style.display = "none";
+  }
+}
+applySimulUi();
+
+simulToggle.addEventListener("change", () => {
+  simulMode = simulToggle.checked;
+  localStorage.setItem(SIMUL_KEY, simulMode ? "true" : "false");
+  rebuildTargetDropdown();
+  applySimulUi();
+  reconnectWithNewLanguage();
+});
 
 function initAudioIfNeeded() {
   if (audioInitialized) return;
@@ -993,21 +1099,32 @@ function getVrDurationStr() {
 
 function updateVrUi() {
   const hasRecording = !!localStorage.getItem(VR_KEY);
-
-  vrPlayBtn.disabled = !hasRecording || vrIsRecording;
-  vrClearBtn.disabled = !hasRecording || vrIsRecording;
-  vrDurationSpan.textContent = getVrDurationStr();
-
   const modelDisplay = document.getElementById("modelNameDisplay");
-  if (hasRecording) {
-    vrStatus.textContent = "Voice replication ready.";
-    vrStatus.className = "vr-status ok";
-    if (modelDisplay) modelDisplay.textContent = window._vrModelName || "";
-  } else {
-    vrStatus.textContent = "";
+
+  if (simulMode) {
+    vrRecordBtn.disabled = true;
+    vrPlayBtn.disabled = true;
+    vrClearBtn.disabled = true;
+    vrSection.classList.add("disabled");
+    vrStatus.textContent = "Not available in Simultaneous mode.";
     vrStatus.className = "vr-status";
-    if (modelDisplay) modelDisplay.textContent = window._modelName || "";
+    if (modelDisplay) modelDisplay.textContent = window._simulModelName || "";
+  } else {
+    vrRecordBtn.disabled = false;
+    vrPlayBtn.disabled = !hasRecording || vrIsRecording;
+    vrClearBtn.disabled = !hasRecording || vrIsRecording;
+    vrSection.classList.remove("disabled");
+    if (hasRecording) {
+      vrStatus.textContent = "Voice replication ready.";
+      vrStatus.className = "vr-status ok";
+      if (modelDisplay) modelDisplay.textContent = window._vrModelName || "";
+    } else {
+      vrStatus.textContent = "";
+      vrStatus.className = "vr-status";
+      if (modelDisplay) modelDisplay.textContent = window._modelName || "";
+    }
   }
+  vrDurationSpan.textContent = getVrDurationStr();
 }
 
 async function startVrRecording() {

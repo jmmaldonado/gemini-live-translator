@@ -132,6 +132,7 @@
 
         <div class="input-container">
           <div class="input-wrapper">
+            <span class="auto-detect-label" id="autoDetectLabel" style="display:none">Translate to:</span>
             <div class="language-selector">
               <div class="custom-select" id="sourceLangWrapper">
                 <button class="custom-select-trigger" id="sourceLangTrigger">English</button>
@@ -146,11 +147,18 @@
               </div>
             </div>
             <button type="button" id="startAudioButton" disabled>Start</button>
-            <label class="ptt-toggle">
-              <input type="checkbox" id="pttToggle" disabled>
-              <span class="ptt-slider"></span>
-              <span class="ptt-label">Push to Talk</span>
-            </label>
+            <div class="toggle-group">
+              <label class="ptt-toggle">
+                <input type="checkbox" id="simulToggle">
+                <span class="ptt-slider"></span>
+                <span class="ptt-label">Simul</span>
+              </label>
+              <label class="ptt-toggle">
+                <input type="checkbox" id="pttToggle" disabled>
+                <span class="ptt-slider"></span>
+                <span class="ptt-label">Push to Talk</span>
+              </label>
+            </div>
           </div>
         </div>
       </div>

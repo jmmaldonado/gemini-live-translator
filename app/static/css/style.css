@@ -165,6 +165,12 @@ h1 {
 .custom-select-dropdown::-webkit-scrollbar-track { background: #2d2d2d; }
 .custom-select-dropdown::-webkit-scrollbar-thumb { background: #555; border-radius: 4px; }
 
+.auto-detect-label {
+  font-size: 1rem;
+  color: #5f6368;
+  white-space: nowrap;
+}
+
 .lang-swap-btn {
   background: var(--input-bg);
   border: 1px solid var(--border-color);
@@ -198,8 +204,13 @@ h1 {
   transition: all 0.2s ease;
 }
 
-.toggle-console-btn:hover {
+.toggle-console-btn:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.25);
+}
+
+.toggle-console-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .toggle-console-btn.active {
@@ -456,6 +467,15 @@ button {
   box-shadow: 0 0 0 4px rgba(229, 57, 53, 0.25);
 }
 
+/* Toggle group */
+.toggle-group {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex: 1;
+  justify-content: flex-end;
+}
+
 /* PTT toggle switch */
 .ptt-toggle {
   display: flex;
@@ -464,8 +484,6 @@ button {
   cursor: pointer;
   user-select: none;
   -webkit-user-select: none;
-  flex: 1;
-  justify-content: flex-end;
   pointer-events: none;
 }
 
@@ -793,6 +811,11 @@ button {
 }
 
 .vr-section-header:hover { color: var(--primary-color); }
+
+.vr-section.disabled .vr-section-header {
+  pointer-events: none;
+  opacity: 0.5;
+}
 
 .vr-chevron {
   font-size: 0.6rem;

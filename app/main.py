@@ -33,9 +33,13 @@ from translator_agent import (  # noqa: E402
     LANGUAGES,
     MODEL,
     POPULAR_LANGUAGES,
+    SIMUL_LANGUAGES,
+    SIMUL_MODEL,
+    SIMUL_POPULAR_LANGUAGES,
     VR_MODEL,
     build_system_instruction,
     load_default_glossary,
+    simul_language_code,
 )
 
 MAX_GLOSSARY_ENTRIES = 1000  # safety cap on per-session glossary length
@@ -100,6 +104,9 @@ async def get_languages():
         "popular": POPULAR_LANGUAGES,
         "model": MODEL,
         "vrModel": VR_MODEL,
+        "simulModel": SIMUL_MODEL,
+        "simulLanguages": SIMUL_LANGUAGES,
+        "simulPopular": SIMUL_POPULAR_LANGUAGES,
     }
 
 
@@ -220,14 +227,14 @@ async def websocket_endpoint(
     session_id: str,
     source: str = "en",
     target: str = "ja",
+    simul: bool = False,
 ) -> None:
     """WebSocket endpoint bridging browser audio to a Gemini Live session."""
-    logger.debug(
-        f"WebSocket connection request: user_id={user_id}, session_id={session_id}, "
-        f"source={source}, target={target}"
+    logger.info(
+        "WS request: source=%s, target=%s, simul=%s",
+        source, target, simul,
     )
     await websocket.accept()
-    logger.debug("WebSocket connection accepted")
 
     # Wait for the client's setup message (carries the per-session glossary).
     # Falls back to the on-disk default glossary if the client doesn't send one
@@ -252,13 +259,25 @@ async def websocket_endpoint(
     vr_consent_audio = setup_data.vr_consent_audio if setup_data else None
     vr_enabled = vr_voice_sample is not None and vr_consent_audio is not None
 
-    system_instruction = build_system_instruction(source, target, glossary_entries)
     display_map = _build_display_map(
         glossary_entries if glossary_entries is not None else load_default_glossary()
     )
-    active_model = VR_MODEL if vr_enabled else MODEL
-    if vr_enabled:
-        logger.info("Voice replication enabled, using model %s", active_model)
+
+    if simul:
+        active_model = SIMUL_MODEL
+        system_instruction = None
+        target_code = simul_language_code(target)
+        vr_enabled = False
+        logger.info(
+            "Simultaneous mode: model=%s, target=%s, target_code=%s",
+            active_model, target, target_code,
+        )
+    else:
+        system_instruction = build_system_instruction(source, target, glossary_entries)
+        target_code = None
+        active_model = VR_MODEL if vr_enabled else MODEL
+        if vr_enabled:
+            logger.info("Voice replication enabled, using model %s", active_model)
 
     # Shared state between the upstream forwarder and the session loop. The
     # forwarder has the lifetime of the browser WebSocket and writes to whichever
@@ -298,24 +317,32 @@ async def websocket_endpoint(
         nonlocal current_session
 
         def _build_config():
-            cfg = types.LiveConnectConfig(
+            kwargs = dict(
                 response_modalities=[types.Modality.AUDIO],
                 input_audio_transcription=types.AudioTranscriptionConfig(),
                 output_audio_transcription=types.AudioTranscriptionConfig(),
-                system_instruction=types.Content(
-                    parts=[types.Part(text=system_instruction)]
-                ),
             )
-            if vr_enabled:
-                cfg.speech_config = types.SpeechConfig(
-                    voice_config=types.VoiceConfig(
-                        replicated_voice_config=types.ReplicatedVoiceConfig(
-                            mime_type="audio/wav",
-                            voice_sample_audio=vr_voice_sample,
-                            consent_audio=vr_consent_audio,
+            if simul:
+                kwargs["translation_config"] = types.TranslationConfig(
+                    target_language_code=target_code,
+                    echo_target_language=True,
+                )
+            else:
+                kwargs["system_instruction"] = types.Content(
+                    parts=[types.Part(text=system_instruction)]
+                )
+                if vr_enabled:
+                    kwargs["speech_config"] = types.SpeechConfig(
+                        voice_config=types.VoiceConfig(
+                            replicated_voice_config=types.ReplicatedVoiceConfig(
+                                mime_type="audio/wav",
+                                voice_sample_audio=vr_voice_sample,
+                                consent_audio=vr_consent_audio,
+                            )
                         )
                     )
-                )
+            cfg = types.LiveConnectConfig(**kwargs)
+            logger.debug("LiveConnectConfig: %s", cfg.model_dump(exclude_none=True))
             return cfg
 
         next_ready = asyncio.Event()
