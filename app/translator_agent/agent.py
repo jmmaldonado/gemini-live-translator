@@ -253,9 +253,19 @@ def build_system_instruction(
     source_lang: str = "en",
     target_lang: str = "ja",
     glossary_entries: list[GlossaryEntry] | None = None,
+    transcribe_only: bool = False,
 ) -> str:
-    """Build the translator system instruction for the given language pair and glossary."""
+    """Build the translator or transcriber system instruction."""
     source_name = LANGUAGES.get(source_lang, source_lang)
+    if transcribe_only:
+        return (
+            f"You are a real-time verbatim speech-to-text transcriber for {source_name}. "
+            f"Listen to the incoming audio and immediately output the exact, verbatim "
+            f"transcription of the spoken words in {source_name}. Do not translate. "
+            f"Do not summarize. Do not explain. Do not converse or add conversational filler. "
+            f"Output ONLY the transcribed words, maintaining original casing, punctuation, and terms verbatim."
+        )
+
     target_name = LANGUAGES.get(target_lang, target_lang)
     entries = (
         glossary_entries if glossary_entries is not None else load_default_glossary()
@@ -270,3 +280,4 @@ def build_system_instruction(
         f"produce exactly one translation of that segment and nothing else."
         + _glossary_section(entries)
     )
+

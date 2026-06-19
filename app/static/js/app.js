@@ -17,6 +17,12 @@ let audioInitialized = false;
 const SIMUL_KEY = "live-translator.simul";
 let simulMode = localStorage.getItem(SIMUL_KEY) === "true";
 
+const TRANSCRIBE_ONLY_KEY = "live-translator.transcribeOnly";
+let transcribeOnlyMode = localStorage.getItem(TRANSCRIBE_ONLY_KEY) === "true";
+
+const AUDIO_SOURCE_KEY = "live-translator.audioSource";
+let audioSource = localStorage.getItem(AUDIO_SOURCE_KEY) || "mic";
+
 const sourceLangSelect = document.getElementById("sourceLang");
 const targetLangSelect = document.getElementById("targetLang");
 
@@ -178,6 +184,7 @@ function getWebSocketUrl() {
   const target = targetLangSelect.value;
   let url = wsProtocol + "//" + window.location.host + "/ws/" + userId + "/" + sessionId + "?source=" + source + "&target=" + target;
   if (simulMode) url += "&simul=true";
+  if (transcribeOnlyMode) url += "&transcribe_only=true";
   return url;
 }
 
@@ -430,7 +437,7 @@ function connectWebsocket() {
         if (part.inlineData) {
           const mimeType = part.inlineData.mimeType;
           const data = part.inlineData.data;
-          if (mimeType && mimeType.startsWith("audio/pcm") && audioPlayerNode) {
+          if (mimeType && mimeType.startsWith("audio/pcm") && audioPlayerNode && !transcribeOnlyMode) {
             audioPlayerNode.port.postMessage(base64ToArray(data));
           }
         }
@@ -520,27 +527,42 @@ function startAudio() {
   });
   const loadingOverlay = document.getElementById("loadingOverlay");
   loadingOverlay.classList.remove("hidden");
-  startAudioRecorderWorklet(audioRecorderHandler, inputId).then(([node, ctx, stream]) => {
-    audioRecorderNode = node;
-    audioRecorderContext = ctx;
-    micStream = stream;
-    setTimeout(() => {
+  startAudioRecorderWorklet(audioRecorderHandler, inputId, audioSource === "tab")
+    .then(([node, ctx, stream]) => {
+      audioRecorderNode = node;
+      audioRecorderContext = ctx;
+      micStream = stream;
+      setTimeout(() => {
+        loadingOverlay.classList.add("hidden");
+        const { src, tgt } = getLanguageNames();
+        if (transcribeOnlyMode) {
+          addSystemMessage(`Ready for ${src} transcription`);
+        } else {
+          addSystemMessage(`Ready for ${src} to ${tgt} translation`);
+        }
+        if (pttMode) {
+          startAudioButton.disabled = false;
+          is_audio = false;
+        }
+      }, 3000);
+    })
+    .catch((err) => {
       loadingOverlay.classList.add("hidden");
-      const { src, tgt } = getLanguageNames();
-      addSystemMessage(`Ready for ${src} to ${tgt} translation`);
-      if (pttMode) {
-        startAudioButton.disabled = false;
-        is_audio = false;
-      }
-    }, 3000);
-  });
+      audioInitialized = false;
+      addSystemMessage(`Error starting audio: ${err.message || err}`);
+      console.error(err);
+    });
 }
 
 const startAudioButton = document.getElementById("startAudioButton");
 const pttToggle = document.getElementById("pttToggle");
 const simulToggle = document.getElementById("simulToggle");
+const transcribeOnlyToggle = document.getElementById("transcribeOnlyToggle");
+const audioSourceSelect = document.getElementById("audioSourceSelect");
 
 simulToggle.checked = simulMode;
+transcribeOnlyToggle.checked = transcribeOnlyMode;
+audioSourceSelect.value = audioSource;
 
 function applySimulUi() {
   const glossaryBtn = document.getElementById("openGlossary");
@@ -549,6 +571,11 @@ function applySimulUi() {
   const sourceLangWrapper = document.getElementById("sourceLangWrapper");
   const swapBtn = document.getElementById("swapLangs");
   const glossarySimulNote = document.getElementById("glossarySimulNote");
+
+  if (transcribeOnlyMode) {
+    return; // Overridden by applyTranscribeOnlyUi
+  }
+
   if (simulMode) {
     sourceLangWrapper.style.display = "none";
     swapBtn.style.display = "none";
@@ -561,7 +588,27 @@ function applySimulUi() {
     if (glossarySimulNote) glossarySimulNote.style.display = "none";
   }
 }
+
+function applyTranscribeOnlyUi() {
+  const targetLangWrapper = document.getElementById("targetLangWrapper");
+  const swapBtn = document.getElementById("swapLangs");
+  const autoDetectLabel = document.getElementById("autoDetectLabel");
+  const sourceLangWrapper = document.getElementById("sourceLangWrapper");
+
+  if (transcribeOnlyMode) {
+    targetLangWrapper.style.display = "none";
+    swapBtn.style.display = "none";
+    sourceLangWrapper.style.display = "";
+    autoDetectLabel.style.display = "none";
+  } else {
+    targetLangWrapper.style.display = "";
+    applySimulUi();
+  }
+}
+
+// Initial UI application
 applySimulUi();
+applyTranscribeOnlyUi();
 
 simulToggle.addEventListener("change", () => {
   simulMode = simulToggle.checked;
@@ -569,6 +616,41 @@ simulToggle.addEventListener("change", () => {
   rebuildTargetDropdown();
   applySimulUi();
   reconnectWithNewLanguage();
+});
+
+transcribeOnlyToggle.addEventListener("change", () => {
+  transcribeOnlyMode = transcribeOnlyToggle.checked;
+  localStorage.setItem(TRANSCRIBE_ONLY_KEY, transcribeOnlyMode ? "true" : "false");
+  applyTranscribeOnlyUi();
+  reconnectWithNewLanguage();
+});
+
+audioSourceSelect.addEventListener("change", () => {
+  audioSource = audioSourceSelect.value;
+  localStorage.setItem(AUDIO_SOURCE_KEY, audioSource);
+
+  if (audioInitialized) {
+    addSystemMessage(`Switching audio source to: ${audioSource === "tab" ? "Browser Tab" : "Microphone"}`);
+    if (audioRecorderContext) {
+      if (micStream) {
+        micStream.getTracks().forEach(t => t.stop());
+      }
+      audioRecorderContext.close().then(() => {
+        startAudioRecorderWorklet(audioRecorderHandler, getSavedInputDevice(), audioSource === "tab")
+          .then(([node, ctx, stream]) => {
+            audioRecorderNode = node;
+            audioRecorderContext = ctx;
+            micStream = stream;
+            addSystemMessage("Audio source switched successfully");
+          })
+          .catch((err) => {
+            audioInitialized = false;
+            addSystemMessage(`Failed to switch audio source: ${err.message || err}`);
+            console.error(err);
+          });
+      });
+    }
+  }
 });
 
 function initAudioIfNeeded() {
@@ -986,7 +1068,7 @@ document.getElementById("applyAudio").addEventListener("click", async () => {
   if (audioRecorderContext) {
     if (micStream) micStream.getTracks().forEach(t => t.stop());
     await audioRecorderContext.close();
-    const [node, ctx, stream] = await startAudioRecorderWorklet(audioRecorderHandler, getSavedInputDevice());
+    const [node, ctx, stream] = await startAudioRecorderWorklet(audioRecorderHandler, getSavedInputDevice(), audioSource === "tab");
     audioRecorderNode = node;
     audioRecorderContext = ctx;
     micStream = stream;

@@ -18,6 +18,13 @@
         </a>
       </div>
       <div class="header-controls">
+        <div class="header-dropdown-container">
+          <label for="audioSourceSelect" class="header-label">Audio Source:</label>
+          <select id="audioSourceSelect" class="header-select">
+            <option value="mic">Microphone</option>
+            <option value="tab">Browser Tab</option>
+          </select>
+        </div>
         <button id="openAudio" class="toggle-console-btn">Voice & Audio</button>
         <button id="openGlossary" class="toggle-console-btn">Glossary</button>
         <button id="openOverlay" class="toggle-console-btn">Caption</button>
@@ -156,6 +163,11 @@
             </div>
             <button type="button" id="startAudioButton" disabled>Start</button>
             <div class="toggle-group">
+              <label class="ptt-toggle">
+                <input type="checkbox" id="transcribeOnlyToggle">
+                <span class="ptt-slider"></span>
+                <span class="ptt-label">Transcribe Only</span>
+              </label>
               <label class="ptt-toggle">
                 <input type="checkbox" id="simulToggle">
                 <span class="ptt-slider"></span>

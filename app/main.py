@@ -234,11 +234,12 @@ async def websocket_endpoint(
     source: str = "en",
     target: str = "ja",
     simul: bool = False,
+    transcribe_only: bool = False,
 ) -> None:
     """WebSocket endpoint bridging browser audio to a Gemini Live session."""
     logger.info(
-        "WS request: source=%s, target=%s, simul=%s",
-        source, target, simul,
+        "WS request: source=%s, target=%s, simul=%s, transcribe_only=%s",
+        source, target, simul, transcribe_only,
     )
     await websocket.accept()
 
@@ -269,7 +270,16 @@ async def websocket_endpoint(
         glossary_entries if glossary_entries is not None else load_default_glossary()
     )
 
-    if simul:
+    if transcribe_only:
+        active_model = SIMUL_MODEL
+        system_instruction = None
+        target_code = simul_language_code(source)
+        vr_enabled = False
+        logger.info(
+            "Transcribe only mode: model=%s, source=%s, target_code=%s",
+            active_model, source, target_code,
+        )
+    elif simul:
         active_model = SIMUL_MODEL
         system_instruction = None
         target_code = simul_language_code(target)
@@ -279,7 +289,7 @@ async def websocket_endpoint(
             active_model, target, target_code,
         )
     else:
-        system_instruction = build_system_instruction(source, target, glossary_entries)
+        system_instruction = build_system_instruction(source, target, glossary_entries, transcribe_only=False)
         target_code = None
         active_model = VR_MODEL if vr_enabled else MODEL
         if vr_enabled:
@@ -328,7 +338,7 @@ async def websocket_endpoint(
                 input_audio_transcription=types.AudioTranscriptionConfig(),
                 output_audio_transcription=types.AudioTranscriptionConfig(),
             )
-            if simul:
+            if simul or transcribe_only:
                 kwargs["translation_config"] = types.TranslationConfig(
                     target_language_code=target_code,
                     echo_target_language=True,

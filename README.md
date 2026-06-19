@@ -1,6 +1,13 @@
 # Live Translator
 
-Real-time audio translation powered by Gemini Live API. Speak in any language and hear the translation immediately. Two modes: agent mode (97 languages, glossary, voice replication) and simultaneous translation mode (78 languages, auto-detect source language).
+Real-time audio translation and speech-to-text transcription powered by Gemini Live API. Speak in any language and hear the translation immediately, or capture and transcribe audio directly from your browser.
+
+> [!NOTE]
+> ### 🚀 New Capabilities Added
+> * **Browser Tab Audio Capture**: You can now capture, stream, and translate/transcribe audio playing directly from a browser tab (using screen capture audio sharing) in addition to your standard **Microphone**.
+> * **Transcribe Only Mode**: Toggle "Transcribe Only" to run real-time, verbatim speech-to-text transcription of your selected source language, bypassing translation and audio playback overhead.
+
+Two main translation modes are supported: agent mode (97 languages, glossary, voice replication) and simultaneous translation mode (78 languages, auto-detect source language).
 
 ![Demo](demo.gif)
 
@@ -57,9 +64,19 @@ Language selections are preserved when switching modes — codes are mapped auto
 
 Toggle **Push to Talk** on the right to switch from always-on to manual control. Hold the **Hold to Talk** button (or press spacebar) to transmit, release to stop.
 
-### Audio Settings
+### Audio Settings & Sources
 
-Click **Audio** in the header to select which microphone and speaker to use. Choices are saved in your browser and applied on the next session.
+- **Audio Source (New)**: Choose between **Microphone** and **Browser Tab** in the top header.
+  - **Microphone**: Uses your standard connected recording hardware.
+  - **Browser Tab**: Captures audio directly from a browser tab of your choice (requires checking "Share audio" in the Chrome screen share dialog). Excellent for translating YouTube videos, Google Meet calls, or virtual presentations.
+- **Hardware Selection**: Click **Voice & Audio** in the header to select which specific microphone and speaker to use. Choices are saved in your browser and applied on the next session.
+
+### Transcribe Only Mode (New)
+
+Toggle **Transcribe Only** to disable translation and run a real-time, verbatim speech-to-text transcriber in the source language.
+- **Direct Transcription**: Disables the target language options and outputs the exact spoken words in the source language.
+- **No Playback Overhead**: Disables audio output generation to minimize latency and bandwidth.
+- **Auto-Detection**: Works in combination with the simultaneous translation engine.
 
 ### Glossary
 
@@ -156,7 +173,9 @@ FastAPI bridges one browser WebSocket to a series of Gemini Live API sessions. T
 
 **Simultaneous translation mode** uses `gemini-3.5-live-translate-preview` with a `TranslationConfig` instead of system instructions. The config specifies `target_language_code` and `echo_target_language=True` (so the model echoes back what it hears in the target language). This model auto-detects the source language and does not support tools, glossary, or voice replication.
 
-Audio input is 16 kHz mono PCM; output is 24 kHz PCM (both modes).
+**Transcribe Only mode** also uses `gemini-3.5-live-translate-preview` (`SIMUL_MODEL`) but configures the target language code to be the same as the source language's simultaneous translation language code. This effectively performs real-time speech-to-text transcription in the source language. To save bandwidth and resources, downstream audio feedback is ignored on the frontend when in this mode.
+
+Audio input is 16 kHz mono PCM; output is 24 kHz PCM (translation modes).
 
 ### GoAway Handling
 
